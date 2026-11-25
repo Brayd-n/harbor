@@ -49,7 +49,9 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
     }
   });
 
-  app.addHook('onSend', async (_req, reply) => {
+  app.addHook('onSend', async (req, reply) => {
+    // Built JS/CSS/font file names contain a content hash, so browsers can keep them.
+    if (req.url.startsWith('/assets/')) reply.header('Cache-Control', 'public, max-age=31536000, immutable');
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');

@@ -69,9 +69,13 @@ PGHOST=127.0.0.1 PGPORT=55432 PGUSER=postgres PGPASSWORD=dev PGDATABASE=harbor n
 2. Add a Caddy site block and reload Caddy:
    ```
    YOUR_DOMAIN {
-       encode zstd gzip
-       header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-       reverse_proxy 127.0.0.1:8083
+       # Replies stream as server-sent events: flush each chunk right away and don't compress them.
+       reverse_proxy 127.0.0.1:8083 {
+           flush_interval -1
+       }
+       @compress not path /api/chats/*/messages
+       encode @compress zstd gzip
+       header Strict-Transport-Security "max-age=31536000"
    }
    ```
 3. `DOMAIN=YOUR_DOMAIN OWNER_EMAIL=you@gmail.com ./deploy.sh`
