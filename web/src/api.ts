@@ -67,6 +67,7 @@ export const PROVIDER_HELP: Record<string, { url: string; hint: string }> = {
   openai: { url: 'https://platform.openai.com/api-keys', hint: 'Starts with sk-' },
   google: { url: 'https://aistudio.google.com/apikey', hint: 'From Google AI Studio' },
   openrouter: { url: 'https://openrouter.ai/settings/keys', hint: 'Starts with sk-or-' },
+  'opencode-go': { url: 'https://opencode.ai/auth', hint: 'API key from your OpenCode workspace (Go plan)' },
 };
 
 export function relativeDay(iso: string) {

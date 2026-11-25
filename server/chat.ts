@@ -87,11 +87,14 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
       let usage: object | null = null;
       try {
         const result = streamText({
-          model: languageModel(provider, modelId, apiKey),
+          model: languageModel(provider, modelId, apiKey, id),
           system: systemPrompt(),
           messages: toModelMessages(setup.history),
           abortSignal: AbortSignal.any([abort.signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]),
           maxRetries: 1,
+          // The SDK's default logs the whole error, which can include the chat text it sent. Errors
+          // already reach the user through the stream, so nothing is logged here.
+          onError: () => {},
         });
         for await (const part of result.fullStream) {
           if (part.type === 'text-delta') {

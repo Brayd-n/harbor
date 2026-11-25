@@ -37,7 +37,6 @@ export function SignIn() {
   return (
     <Frame>
       <h1 className="auth-title">Harbor</h1>
-      <p className="auth-lede">One place to chat with Claude, GPT, Gemini and hundreds of other models, using your own API keys.</p>
       {err && <p className="form-error">{loginError[err] ?? loginError.failed}</p>}
       <a className="btn btn-primary btn-wide" href="/auth/google">
         <GoogleIcon /> Continue with Google

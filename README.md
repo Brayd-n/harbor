@@ -1,6 +1,6 @@
 # Harbor
 
-A self-hosted AI chat app. Sign in with Google, add your own API keys, and chat with models from Anthropic, OpenAI, Google and OpenRouter in one place. Your history is stored on your own server, so it's the same on every device.
+A self-hosted AI chat app. Sign in with Google, add your own API keys, and chat with models from Anthropic, OpenAI, Google, OpenRouter and your OpenCode Go plan in one place. Your history is stored on your own server, so it's the same on every device.
 
 This is the first milestone (web chat). Next comes a desktop app with an agent mode that works on files and a coding mode for project folders, with tools that run on your own machine. See the roadmap below.
 
@@ -10,6 +10,7 @@ This is the first milestone (web chat). Next comes a desktop app with an agent m
 
 - **Bring your own keys.** Each user adds keys for the providers they use. Harbor never pays for anyone's usage and never shows a key again after it's saved.
 - **Hundreds of models.** The model list comes from [models.dev](https://models.dev), the open catalog OpenCode uses, refreshed daily: Claude, GPT, Gemini, and everything on OpenRouter, with context sizes and prices.
+- **OpenCode Go.** Use your Go subscription key. Each model is called through the API style OpenCode lists for it (OpenAI-compatible, Anthropic, OpenAI or Google), with a stable per-chat `x-opencode-session` ID and a Harbor user agent, as the [Go docs](https://opencode.ai/v2/docs/console/go/) ask. Keys are only ever sent to `opencode.ai/inference/go/`, even if the catalog says otherwise. Go's free models only work inside OpenCode, so they're hidden.
 - **Streaming replies** with Markdown, code blocks, and the model's thinking when it shares it. Stop a reply at any point and keep what arrived.
 - **Required two-factor sign-in** for every account, with recovery codes.
 - **Export and delete.** Download all your chats as JSON, or delete your account and everything in it.

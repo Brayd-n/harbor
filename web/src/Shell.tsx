@@ -257,7 +257,7 @@ function ChatView(props: {
               {noKeys ? (
                 <>
                   <h1>Add an API key to start</h1>
-                  <p>Harbor uses your own keys from Anthropic, OpenAI, Google or OpenRouter. They’re encrypted on the server and never shown again.</p>
+                  <p>Harbor uses your own keys from Anthropic, OpenAI, Google, OpenRouter, or your OpenCode Go plan. They’re encrypted on the server and never shown again.</p>
                   <button className="btn btn-primary" onClick={props.openSettings}>Add a key</button>
                 </>
               ) : (
@@ -470,7 +470,7 @@ function Composer({ disabled, busy, onSend, onStop, picker }: { disabled: boolea
   );
 }
 
-const providerName: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', openrouter: 'OpenRouter' };
+const providerName: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go' };
 
 function ModelPicker({ models, value, onChange }: { models: Model[]; value: string; onChange: (id: string) => void }) {
   const [open, setOpen] = useState(false);

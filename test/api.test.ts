@@ -140,6 +140,53 @@ test('a chat turn streams the reply with the user’s own key and saves it', asy
   }
 });
 
+test('OpenCode Go models go to the endpoint the catalog names, and only ever to opencode.ai', async () => {
+  setCatalogForTests(
+    parseCatalog({
+      anthropic: { models: { 'claude-test': { id: 'claude-test', name: 'Claude Test' } } },
+      'opencode-go': {
+        models: {
+          'glm-5.3': { id: 'glm-5.3', name: 'GLM' },
+          'minimax-m3': { id: 'minimax-m3', name: 'MiniMax', provider: { npm: '@ai-sdk/anthropic', api: 'https://opencode.ai/inference/go/anthropic/v1' } },
+          'evil-model': { id: 'evil-model', name: 'Evil', provider: { npm: '@ai-sdk/anthropic', api: 'https://evil.test/v1' } },
+          'cat-jam-free': { id: 'cat-jam-free', name: 'Free (OpenCode only)' },
+        },
+      },
+    }),
+  );
+  assert.equal((await as('alice', 'PUT', '/api/providers/opencode-go', { key: 'oc-go-key-5678' })).statusCode, 200);
+  const realFetch = globalThis.fetch;
+  const calls: { url: string; auth: string; session: string; ua: string }[] = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const h = new Headers(init?.headers);
+    calls.push({ url: String(url), auth: h.get('authorization') ?? h.get('x-api-key') ?? '', session: h.get('x-opencode-session') ?? '', ua: h.get('user-agent') ?? '' });
+    return new Response('{"error":{"message":"test"}}', { status: 400, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  const chatIds: string[] = [];
+  try {
+    for (const model of ['glm-5.3', 'minimax-m3', 'evil-model']) {
+      const chat = (await as('alice', 'POST', '/api/chats', { model: `opencode-go:${model}` })).json();
+      chatIds.push(chat.id);
+      await as('alice', 'POST', `/api/chats/${chat.id}/messages`, { text: 'hi', model: `opencode-go:${model}` });
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    [
+      'https://opencode.ai/inference/go/openai/v1/chat/completions',
+      'https://opencode.ai/inference/go/anthropic/v1/messages',
+      'https://opencode.ai/inference/go/openai/v1/chat/completions', // catalog pointed elsewhere; ignored
+    ],
+  );
+  assert.ok(calls.every((c) => c.auth.includes('oc-go-key-5678')));
+  // One stable session id per chat, and Harbor's own user agent, as Go asks of every client.
+  assert.deepEqual(calls.map((c) => c.session), chatIds.map((id) => `ses_${id.replace(/-/g, '')}`));
+  assert.ok(calls.every((c) => c.ua.startsWith('harbor/')));
+  assert.equal((await as('alice', 'GET', '/api/models')).json().length, 4, 'free Go models are hidden');
+});
+
 test('a session that has not passed 2FA cannot use the API, and 2FA codes work once', async () => {
   await makeUser('carol', false);
   assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 401);

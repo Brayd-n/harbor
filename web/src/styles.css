@@ -19,6 +19,7 @@
   --p-openai: #9fd4c0;
   --p-google: #8ab4f8;
   --p-openrouter: #b9a3f5;
+  --p-opencode-go: #e8e2d4;
   --shadow-pop: 0 18px 50px -12px rgb(0 0 0 / 0.6);
   --sans: 'Geist Variable', system-ui, sans-serif;
   --mono: 'JetBrains Mono Variable', ui-monospace, monospace;
@@ -45,6 +46,7 @@
     --p-openai: #2f8a6a;
     --p-google: #2f68c9;
     --p-openrouter: #6b4fc4;
+    --p-opencode-go: #3d3a33;
     --shadow-pop: 0 18px 50px -12px rgb(20 30 45 / 0.28);
     color-scheme: light;
   }
@@ -241,6 +243,7 @@ button.top-title:hover { background: var(--surface); }
 .p-openai { background: var(--p-openai); }
 .p-google { background: var(--p-google); }
 .p-openrouter { background: var(--p-openrouter); }
+.p-opencode-go { background: var(--p-opencode-go); }
 .picker-pop {
   position: absolute; bottom: calc(100% + 8px); left: 0; width: min(440px, calc(100vw - 48px)); z-index: 20;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow-pop);
