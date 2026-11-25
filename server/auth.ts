@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import QRCode from 'qrcode';
@@ -10,12 +10,13 @@ const SESSION_DAYS = 30;
 const PENDING_MINUTES = 10; // a signed-in-but-not-yet-2FA session lives this long
 const MAX_MFA_FAILURES = 10; // per 15 minutes
 
-const hash = (token: string) => createHash('sha256').update(token).digest();
+export const hash = (token: string) => createHash('sha256').update(token).digest();
 const b64url = (b: Buffer) => b.toString('base64url');
 const cookieOpts = { path: '/', httpOnly: true, secure: true, sameSite: 'lax' as const };
 
 export type AuthConfig = { origin: string; googleClientId: string; googleClientSecret: string; masterKey: Buffer; ownerEmail?: string };
 export type User = { id: string; email: string; name: string; role: 'owner' | 'user'; wrapped: Buffer; mfa_ok: boolean; has_totp: boolean };
+export type Device = { id: string; name: string; os: string; os_version: string; arch: string; hostname: string; home_dir: string; shell: string };
 
 export async function createSession(pool: pg.Pool, userId: string, mfaOk: boolean): Promise<string> {
   const token = b64url(randomBytes(32));
@@ -24,7 +25,7 @@ export async function createSession(pool: pg.Pool, userId: string, mfaOk: boolea
   return token;
 }
 
-async function sessionUser(pool: pg.Pool, token: string | undefined): Promise<User | null> {
+export async function sessionUser(pool: pg.Pool, token: string | undefined): Promise<User | null> {
   if (!token) return null;
   const { rows } = await pool.query(
     `SELECT u.id, u.email, u.name, u.role, u.data_key_wrapped AS wrapped, s.mfa_ok, u.totp_secret_enc IS NOT NULL AS has_totp
@@ -35,13 +36,51 @@ async function sessionUser(pool: pg.Pool, token: string | undefined): Promise<Us
   return rows[0] ?? null;
 }
 
-export async function logEvent(pool: pg.Pool, userId: string, kind: string, req: FastifyRequest) {
-  await pool.query('INSERT INTO auth_events (user_id, kind, ip, user_agent) VALUES ($1, $2, $3, $4)', [
+export async function logEvent(pool: pg.Pool, userId: string, kind: string, req: FastifyRequest, deviceId: string | null = null) {
+  await pool.query('INSERT INTO auth_events (user_id, kind, ip, user_agent, device_id) VALUES ($1, $2, $3, $4, $5)', [
     userId,
     kind,
     req.ip,
     String(req.headers['user-agent'] ?? '').slice(0, 300),
+    deviceId,
   ]);
+}
+
+// --- Desktop access tokens ---
+// Short-lived and stateless: "hat_<deviceId>.<expiry ms>.<HMAC>". Each use still looks the device up,
+// so revoking a device cuts it off at once, not after the token expires.
+export const ACCESS_TTL_MS = 15 * 60_000;
+const accessKey = (master: Buffer) => createHmac('sha256', master).update('harbor access token v1').digest();
+const mac = (master: Buffer, body: string) => createHmac('sha256', accessKey(master)).update(body).digest();
+
+export function signAccess(master: Buffer, deviceId: string, now = Date.now()) {
+  const body = `${deviceId}.${now + ACCESS_TTL_MS}`;
+  return `hat_${body}.${b64url(mac(master, body))}`;
+}
+
+export function verifyAccess(master: Buffer, token: string, now = Date.now()): string | null {
+  const m = /^hat_([0-9a-f-]{36})\.(\d{1,16})\.([\w-]{43})$/.exec(token);
+  if (!m || Number(m[2]) < now) return null;
+  const want = mac(master, `${m[1]}.${m[2]}`);
+  const got = Buffer.from(m[3], 'base64url');
+  return got.length === want.length && timingSafeEqual(got, want) ? m[1] : null;
+}
+
+// The user and device behind a desktop access token, if the device isn't revoked and the account isn't disabled.
+export async function deviceUser(pool: pg.Pool, master: Buffer, token: string): Promise<{ user: User; device: Device } | null> {
+  const deviceId = verifyAccess(master, token);
+  if (!deviceId) return null;
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.name, u.role, u.data_key_wrapped AS wrapped, true AS mfa_ok, true AS has_totp,
+            d.name AS d_name, d.os, d.os_version, d.arch, d.hostname, d.home_dir, d.shell
+     FROM devices d JOIN users u ON u.id = d.user_id
+     WHERE d.id = $1 AND d.revoked_at IS NULL AND u.disabled_at IS NULL`,
+    [deviceId],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  const { d_name, os, os_version, arch, hostname, home_dir, shell, ...user } = r;
+  return { user, device: { id: deviceId, name: d_name, os, os_version, arch, hostname, home_dir, shell } };
 }
 
 const recoveryHash = (code: string) => hash(code.toLowerCase().replace(/[^a-z2-7]/g, ''));
@@ -240,15 +279,25 @@ export async function upsertGoogleUser(pool: pg.Pool, cfg: AuthConfig, sub: stri
   return rows[0].id;
 }
 
-// For /api: a session that has passed 2FA, on an account that isn't disabled.
-export async function requireUser(pool: pg.Pool, req: FastifyRequest, reply: FastifyReply) {
+// For /api: a session that has passed 2FA, or a linked desktop's access token, on an account that isn't disabled.
+export async function requireUser(pool: pg.Pool, master: Buffer, req: FastifyRequest, reply: FastifyReply) {
+  const bearer = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
+  if (bearer) {
+    const found = await deviceUser(pool, master, bearer);
+    if (!found) return reply.code(401).send({ error: 'Please link this device again.' });
+    req.user = found.user;
+    req.device = found.device;
+    return;
+  }
   const user = await sessionUser(pool, req.cookies[SESSION_COOKIE]);
   if (!user || !user.mfa_ok) return reply.code(401).send({ error: 'Please sign in.' });
   req.user = user;
+  req.device = null;
 }
 
 declare module 'fastify' {
   interface FastifyRequest {
     user: User;
+    device: Device | null; // set for desktop requests
   }
 }

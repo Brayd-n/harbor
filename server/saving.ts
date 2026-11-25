@@ -55,7 +55,7 @@ export const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 const KEEP_RECENT = 6; // newest messages always sent word for word
 const COMPACT_AT = 24_000; // tokens of history, or 40% of the model's context if that's smaller
 
-export type HistoryRow = { role: 'user' | 'assistant'; text: string; created_at: Date };
+export type HistoryRow = { role: 'user' | 'assistant'; text: string; created_at: Date; images?: { id: string; mime: string }[] };
 
 // Which messages to fold into the summary this turn, if any.
 export function compactionPlan(summary: string, recent: HistoryRow[], context: number | null) {

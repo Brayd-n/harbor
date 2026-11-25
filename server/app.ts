@@ -2,10 +2,13 @@ import Fastify, { type FastifyError } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
+import websocket from '@fastify/websocket';
 import { existsSync } from 'node:fs';
 import type pg from 'pg';
 import { authRoutes, requireUser, type AuthConfig } from './auth.ts';
 import { chatStreamRoute } from './chat.ts';
+import { deviceApiRoutes, deviceAuthRoutes, wsRoute } from './devices.ts';
+import { Hub } from './hub.ts';
 import { dataKey, seal } from './crypto.ts';
 import { withUser } from './db.ts';
 import { PROVIDERS, getCatalog, isProvider, splitModel } from './models.ts';
@@ -29,7 +32,10 @@ const CSP = [
   "form-action 'self'",
 ].join('; ');
 
-export function buildApp(pool: pg.Pool, cfg: Config) {
+// The desktop app's bundled UI (Tauri) calls the API cross-origin with a bearer token, never cookies.
+const DESKTOP_ORIGINS = new Set(['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost']);
+
+export function buildApp(pool: pg.Pool, cfg: Config, hub = new Hub()) {
   // Caddy reaches the container through Docker's private bridge network; trust X-Forwarded-For only from there.
   const app = Fastify({
     // Request logs never include OAuth codes/state or other query values.
@@ -41,13 +47,31 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
   });
 
   app.register(cookie);
-  app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
+  // req.ip throws on injected WebSocket test requests (no real socket); everything real has one.
+  app.register(rateLimit, { max: 300, timeWindow: '1 minute', keyGenerator: (req) => { try { return req.ip; } catch { return 'unknown'; } } });
+  app.register(websocket, { options: { maxPayload: 512 * 1024 } });
+
+  // CORS for the desktop app only. No credentials: it authenticates with a bearer token it holds.
+  app.addHook('onRequest', async (req, reply) => {
+    const origin = req.headers.origin;
+    if (!origin || !DESKTOP_ORIGINS.has(origin)) return;
+    reply.header('Access-Control-Allow-Origin', origin).header('Vary', 'Origin');
+    if (req.method === 'OPTIONS') {
+      return reply
+        .header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE')
+        .header('Access-Control-Allow-Headers', 'authorization, content-type, x-harbor-conn')
+        .header('Access-Control-Max-Age', '600')
+        .code(204)
+        .send();
+    }
+  });
 
   // CSRF: session cookies are SameSite=Lax, and every state-changing request must also come from our own origin.
+  // Bearer-token requests carry no ambient credentials, and /auth/device/* uses none at all.
   app.addHook('onRequest', async (req, reply) => {
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin !== cfg.origin) {
-      return reply.code(403).send({ error: 'Cross-site request blocked.' });
-    }
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.headers.origin === cfg.origin) return;
+    if (req.headers.authorization?.startsWith('Bearer ') || req.url.startsWith('/auth/device/')) return;
+    return reply.code(403).send({ error: 'Cross-site request blocked.' });
   });
 
   app.addHook('onSend', async (req, reply) => {
@@ -68,16 +92,18 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
   });
 
   authRoutes(app, pool, cfg);
+  deviceAuthRoutes(app, pool, cfg);
+  app.register(async (ws) => wsRoute(ws, pool, hub, cfg));
   app.get('/healthz', async () => ({ ok: true }));
 
   // Everything under /api needs a session that passed 2FA. User data is only touched through withUser(),
   // so row-level security applies on top of the explicit checks.
   app.register(
     async (api) => {
-      api.addHook('preHandler', (req, reply) => requireUser(pool, req, reply));
+      api.addHook('preHandler', (req, reply) => requireUser(pool, cfg.masterKey, req, reply));
       const as = <T>(userId: string, fn: (db: pg.PoolClient) => Promise<T>) => withUser(pool, userId, fn);
 
-      api.get('/me', async (req) => ({ email: req.user.email, name: req.user.name, role: req.user.role }));
+      api.get('/me', async (req) => ({ email: req.user.email, name: req.user.name, role: req.user.role, device: req.device }));
 
       // --- Provider keys (never sent back, only the last 4 characters) ---
 
@@ -125,27 +151,43 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
       // --- Chats ---
 
       api.get('/chats', async (req) =>
-        as(req.user.id, async (db) => (await db.query('SELECT id, title, model, updated_at FROM chats ORDER BY updated_at DESC LIMIT 500')).rows),
+        as(req.user.id, async (db) => (await db.query('SELECT id, title, model, mode, updated_at FROM chats ORDER BY updated_at DESC LIMIT 500')).rows),
       );
 
       api.post(
         '/chats',
-        { schema: { body: { type: 'object', required: ['model'], additionalProperties: false, properties: { model: { type: 'string', maxLength: 300 } } } } },
+        {
+          schema: {
+            body: {
+              type: 'object',
+              required: ['model'],
+              additionalProperties: false,
+              properties: { model: { type: 'string', maxLength: 300 }, project_id: { type: 'string', format: 'uuid' } },
+            },
+          },
+        },
         async (req, reply) => {
-          const { model } = req.body as { model: string };
+          const { model, project_id } = req.body as { model: string; project_id?: string };
           if (!splitModel(model)) return reply.code(400).send({ error: 'Unknown model.' });
+          // A chat with a project is a Code chat. The project must be this user's (RLS + the foreign key).
           const chat = await as(req.user.id, async (db) => {
-            const { rows } = await db.query('INSERT INTO chats (user_id, model) VALUES ($1, $2) RETURNING id, title, model, updated_at', [req.user.id, model]);
+            if (project_id && !(await db.query('SELECT 1 FROM projects WHERE id = $1', [project_id])).rowCount) return null;
+            const { rows } = await db.query(
+              'INSERT INTO chats (user_id, model, mode, project_id) VALUES ($1, $2, $3, $4) RETURNING id, title, model, mode, project_id, updated_at',
+              [req.user.id, model, project_id ? 'code' : 'chat', project_id ?? null],
+            );
             return rows[0];
           });
-          return reply.code(201).send(chat);
+          return chat ? reply.code(201).send(chat) : reply.code(404).send({ error: 'Not found.' });
         },
       );
 
       api.get('/chats/:id', { schema: { params: idParam } }, async (req, reply) => {
         const { id } = req.params as { id: string };
         const chat = await as(req.user.id, async (db) => {
-          const c = await db.query('SELECT id, title, model, updated_at, summary_until FROM chats WHERE id = $1', [id]);
+          const c = await db.query(`SELECT c.id, c.title, c.model, c.mode, c.project_id, c.updated_at, c.summary_until, p.name AS project, pp.path
+             FROM chats c LEFT JOIN projects p ON p.id = c.project_id LEFT JOIN project_paths pp ON pp.project_id = c.project_id AND pp.device_id = $2
+             WHERE c.id = $1`, [id, req.device?.id ?? null]);
           if (!c.rows[0]) return null;
           const m = await db.query('SELECT id, role, content, model, usage, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at', [id]);
           return { ...c.rows[0], messages: m.rows };
@@ -169,7 +211,8 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
         return rowCount ? { ok: true } : reply.code(404).send({ error: 'Not found.' });
       });
 
-      chatStreamRoute(api, pool, cfg.masterKey);
+      chatStreamRoute(api, pool, cfg.masterKey, hub);
+      deviceApiRoutes(api, pool, hub);
 
       // --- Token saving ---
 
@@ -211,6 +254,9 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
 
       api.post('/account/sign-out-everywhere', async (req, reply) => {
         await pool.query('DELETE FROM sessions WHERE user_id = $1', [req.user.id]);
+        await pool.query('UPDATE devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [req.user.id]);
+        await pool.query('DELETE FROM refresh_tokens t USING devices d WHERE d.id = t.device_id AND d.user_id = $1', [req.user.id]);
+        hub.kickUser(req.user.id);
         reply.clearCookie('__Host-session', { path: '/', httpOnly: true, secure: true, sameSite: 'lax' });
         return { ok: true };
       });
@@ -232,6 +278,7 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
       // Deletes everything: chats, messages, keys, sessions, the wrapped data key with the user row.
       api.delete('/account', async (req, reply) => {
         await pool.query('DELETE FROM users WHERE id = $1', [req.user.id]);
+        hub.kickUser(req.user.id);
         reply.clearCookie('__Host-session', { path: '/', httpOnly: true, secure: true, sameSite: 'lax' });
         return { ok: true };
       });
@@ -260,7 +307,10 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
             if (id === req.user.id) return reply.code(400).send({ error: "You can't disable your own account." });
             const disabled = (req.body as { disabled: boolean }).disabled;
             const { rowCount } = await pool.query('UPDATE users SET disabled_at = CASE WHEN $2 THEN now() END WHERE id = $1', [id, disabled]);
-            if (disabled) await pool.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+            if (disabled) {
+              await pool.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+              hub.kickUser(id);
+            }
             return rowCount ? { ok: true } : reply.code(404).send({ error: 'Not found.' });
           },
         );
