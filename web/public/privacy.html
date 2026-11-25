@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy · Harbor</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/legal.css">
+</head>
+<body>
+<p><a href="/">← Harbor</a></p>
+<h1>Privacy Policy</h1>
+<p>Last updated: November 25, 2026</p>
+<p>Harbor is a small personal project run by Braydon Callender. It lets you chat with AI models from Anthropic, OpenAI, Google and OpenRouter using your own API keys. This page explains what it stores and what it does with it.</p>
+
+<h2>What is collected</h2>
+<ul>
+  <li><strong>From Google sign-in:</strong> your Google account ID, email address, and name. Harbor asks only for the basic <code>openid</code>, <code>email</code>, and <code>profile</code> scopes. It does not get your Google password and cannot access your Gmail, Drive, or anything else in your Google account.</li>
+  <li><strong>Two-factor sign-in:</strong> the secret for your authenticator app (encrypted) and hashes of your recovery codes.</li>
+  <li><strong>Your API keys:</strong> stored encrypted (AES-256-GCM) with a key unique to your account, which is itself encrypted with a key kept outside the database. Keys are never shown back to you or anyone else, only their last 4 characters.</li>
+  <li><strong>Your chats:</strong> the messages you send and the replies you receive, which model answered, and how many tokens were used.</li>
+  <li><strong>Sign-in activity:</strong> when you sign in or pass two-factor, with the IP address and browser, so you can see it on your Account page.</li>
+  <li><strong>Sign-in session:</strong> a cookie that keeps you signed in for up to 30 days. Only a hash of it is stored on the server. No advertising or analytics cookies are used.</li>
+  <li><strong>Server logs:</strong> the web server records requests (IP address, time, page, browser type) for security and troubleshooting. Logs are deleted after 30 days.</li>
+</ul>
+
+<h2>AI providers</h2>
+<p>When you send a message, the server sends that chat's history to the provider of the model you picked (Anthropic, OpenAI, Google, or OpenRouter), using your API key. What the provider does with it is covered by your agreement with that provider, not by Harbor. Harbor doesn't send your chats anywhere else.</p>
+
+<h2>How it is used</h2>
+<p>Your data is used only to run the service for you. It is not sold, shared, used for advertising, or used to train AI models. Other users cannot see your data. The operator can see account emails and message counts on an admin page, but not chat contents through the app.</p>
+
+<h2>Where it is stored</h2>
+<p>Data is stored in a PostgreSQL database on a private server (a virtual private server hosted by Hostinger). Connections use HTTPS. Backups are made nightly and kept for 14 days.</p>
+
+<h2>Your choices</h2>
+<ul>
+  <li><strong>Export:</strong> download all of your chats as a JSON file from Settings → Account at any time.</li>
+  <li><strong>Delete:</strong> "Delete my account" permanently removes your account, chats, API keys and sign-in history right away. Copies in backups expire within 14 days.</li>
+  <li>You can also remove Harbor's access in your Google account settings under Security → Third-party apps.</li>
+</ul>
+
+<h2>Children</h2>
+<p>The service is not intended for anyone under 16.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes, the date at the top will be updated. Significant changes will be shown in the app.</p>
+
+<h2>Contact</h2>
+<p>Questions or requests: <a href="mailto:blc0523@outlook.com">blc0523@outlook.com</a>.</p>
+</body>
+</html>

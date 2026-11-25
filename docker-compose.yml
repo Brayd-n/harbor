@@ -1,0 +1,51 @@
+# Production setup on the server (deploy.sh). Secrets live in root-only files in /etc/harbor:
+#   db.env      POSTGRES_PASSWORD=...                                  (created by deploy.sh)
+#   app.env     PGPASSWORD=..., MASTER_KEY=..., APP_ORIGIN=, OWNER_EMAIL= (created by deploy.sh)
+#   google.env  GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET               (added by hand, see README)
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: harbor
+      POSTGRES_USER: harbor
+    env_file: /etc/harbor/db.env
+    command: postgres -c shared_buffers=64MB -c max_connections=20
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harbor -d harbor"]
+      interval: 5s
+      retries: 10
+    mem_limit: 256m
+    restart: unless-stopped
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+    # No ports: only the app container can reach the database.
+
+  app:
+    image: harbor:latest
+    build: .
+    environment:
+      PGHOST: db
+      PGUSER: harbor
+      PGDATABASE: harbor
+    env_file:
+      - /etc/harbor/app.env
+      - path: /etc/harbor/google.env
+        required: false
+    ports:
+      - "127.0.0.1:8083:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 320m
+    restart: unless-stopped
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  db-data:
