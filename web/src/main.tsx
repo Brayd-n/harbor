@@ -4,7 +4,7 @@ import '@fontsource-variable/geist';
 import '@fontsource-variable/jetbrains-mono';
 import './styles.css';
 import { api, type AuthState, type User } from './api.ts';
-import { Enroll, SignIn, Verify } from './Auth.tsx';
+import { SignIn, Verify } from './Auth.tsx';
 import { hasLink, isDesktop } from './desktop.ts';
 import { ApproveLink, LinkDevice } from './Link.tsx';
 import { Shell } from './Shell.tsx';
@@ -50,7 +50,6 @@ function WebApp() {
 
   if (!state) return null;
   if (state.step === 'signed_out') return <SignIn />;
-  if (state.step === 'enroll') return <Enroll user={state.user} onDone={load} />;
   if (state.step === 'verify') return <Verify user={state.user} onDone={load} />;
   if (path === '/link') {
     return (

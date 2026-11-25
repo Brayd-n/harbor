@@ -7,7 +7,7 @@ The desktop app for Windows and Linux adds Code mode, an agent that works in a l
 ## Features
 
 - Web chat with streaming, Markdown and model selection from the [models.dev](https://models.dev) catalog
-- Google sign-in with required TOTP two-factor authentication
+- Google sign-in, with optional TOTP two-factor authentication in Settings
 - Per-user provider keys, encrypted at rest
 - Cost reduction: prompt caching, automatic compaction of long chats, a thinking budget and a short-answer mode, with a monthly spend and savings meter
 - Image attachments, resized on the client before upload

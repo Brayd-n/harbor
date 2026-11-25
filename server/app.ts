@@ -105,7 +105,7 @@ export function buildApp(pool: pg.Pool, cfg: Config, hub = new Hub()) {
       api.addHook('preHandler', (req, reply) => requireUser(pool, cfg.masterKey, req, reply));
       const as = <T>(userId: string, fn: (db: pg.PoolClient) => Promise<T>) => withUser(pool, userId, fn);
 
-      api.get('/me', async (req) => ({ email: req.user.email, name: req.user.name, role: req.user.role, device: req.device }));
+      api.get('/me', async (req) => ({ email: req.user.email, name: req.user.name, role: req.user.role, has_totp: req.user.has_totp, device: req.device }));
 
       // --- Provider keys (never sent back, only the last 4 characters) ---
 

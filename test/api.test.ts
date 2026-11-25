@@ -270,12 +270,14 @@ test('long chats get compacted by the cheapest model, and the savings meter coun
   await pool.query('DELETE FROM provider_keys WHERE user_id = $1', [users.bob.id]);
 });
 
-test('a session that has not passed 2FA cannot use the API, and 2FA codes work once', async () => {
-  await makeUser('carol', false);
-  assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 401);
-  assert.equal((await as('carol', 'GET', '/auth/state')).json().step, 'enroll');
+test('two-factor is optional; once on, sign-in needs it, codes work once, and turning it off needs a code', async () => {
+  // Off by default: a fresh sign-in is usable right away.
+  await makeUser('carol');
+  assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 200);
+  assert.equal((await as('carol', 'GET', '/auth/state')).json().step, 'ready');
 
-  const setup = await as('carol', 'POST', '/auth/2fa/setup');
+  const setup = await as('carol', 'POST', '/api/account/2fa/setup');
+  assert.equal(setup.statusCode, 200);
   const secret = Buffer.from(
     setup.json().secret.replace(/ /g, '').match(/.{1,8}/g)!.map((chunk: string) => {
       // decode base32 chunk by chunk (8 chars = 5 bytes)
@@ -285,22 +287,29 @@ test('a session that has not passed 2FA cannot use the API, and 2FA codes work o
     }).flat(),
   );
   const step = Math.floor(Date.now() / 30_000);
-  assert.equal((await as('carol', 'POST', '/auth/2fa/enroll', { code: '000000' === hotp(secret, step) ? '111111' : '000000' })).statusCode, 400);
-  const enroll = await as('carol', 'POST', '/auth/2fa/enroll', { code: hotp(secret, step) });
+  assert.equal((await as('carol', 'POST', '/api/account/2fa/enable', { code: '000000' === hotp(secret, step) ? '111111' : '000000' })).statusCode, 400);
+  const enroll = await as('carol', 'POST', '/api/account/2fa/enable', { code: hotp(secret, step) });
   assert.equal(enroll.statusCode, 200, enroll.body);
   const recovery: string[] = enroll.json().recoveryCodes;
   assert.equal(recovery.length, 10);
-  const upgraded = enroll.cookies.find((c) => c.name === '__Host-session')!.value;
-  assert.equal((await app.inject({ method: 'GET', url: '/api/chats', headers: { cookie: `__Host-session=${upgraded}` } })).statusCode, 200);
-  assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 401, 'the pre-2FA token is gone');
+  assert.equal((await as('carol', 'POST', '/api/account/2fa/setup')).statusCode, 409, "can't re-enroll over an existing secret");
 
-  // New sign-in: the enrollment code can't be replayed, a recovery code works exactly once.
+  // New sign-in: blocked until 2FA passes; the enrollment code can't be replayed; a recovery code works once.
   users.carol.cookie = `__Host-session=${await createSession(pool, users.carol.id, false)}`;
+  assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 401);
+  assert.equal((await as('carol', 'GET', '/auth/state')).json().step, 'verify');
   assert.equal((await as('carol', 'POST', '/auth/2fa/verify', { code: hotp(secret, step) })).statusCode, 400);
-  assert.equal((await as('carol', 'POST', '/auth/2fa/verify', { code: recovery[0] })).statusCode, 200);
+  const passed = await as('carol', 'POST', '/auth/2fa/verify', { code: recovery[0] });
+  assert.equal(passed.statusCode, 200);
+  assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 401, 'the pre-2FA token is gone');
+  users.carol.cookie = `__Host-session=${passed.cookies.find((c) => c.name === '__Host-session')!.value}`;
+  assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 200);
+
+  // Turning it off needs a valid code; a used recovery code doesn't count.
+  assert.equal((await as('carol', 'POST', '/api/account/2fa/disable', { code: recovery[0] })).statusCode, 400);
+  assert.equal((await as('carol', 'POST', '/api/account/2fa/disable', { code: recovery[1] })).statusCode, 200);
   users.carol.cookie = `__Host-session=${await createSession(pool, users.carol.id, false)}`;
-  assert.equal((await as('carol', 'POST', '/auth/2fa/verify', { code: recovery[0] })).statusCode, 400);
-  assert.equal((await as('carol', 'POST', '/auth/2fa/setup')).statusCode, 409, "can't re-enroll over an existing secret");
+  assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 200, 'off again: sign-in needs no code');
 });
 
 test('cross-site writes, admin access and disabled accounts are blocked', async () => {

@@ -28,7 +28,8 @@ export async function createSession(pool: pg.Pool, userId: string, mfaOk: boolea
 export async function sessionUser(pool: pg.Pool, token: string | undefined): Promise<User | null> {
   if (!token) return null;
   const { rows } = await pool.query(
-    `SELECT u.id, u.email, u.name, u.role, u.data_key_wrapped AS wrapped, s.mfa_ok, u.totp_secret_enc IS NOT NULL AS has_totp
+    `SELECT u.id, u.email, u.name, u.role, u.data_key_wrapped AS wrapped, (s.mfa_ok OR u.totp_secret_enc IS NULL) AS mfa_ok,
+            u.totp_secret_enc IS NOT NULL AS has_totp
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = $1 AND s.expires_at > now() AND u.disabled_at IS NULL`,
     [hash(token)],
@@ -71,7 +72,7 @@ export async function deviceUser(pool: pg.Pool, master: Buffer, token: string): 
   const deviceId = verifyAccess(master, token);
   if (!deviceId) return null;
   const { rows } = await pool.query(
-    `SELECT u.id, u.email, u.name, u.role, u.data_key_wrapped AS wrapped, true AS mfa_ok, true AS has_totp,
+    `SELECT u.id, u.email, u.name, u.role, u.data_key_wrapped AS wrapped, true AS mfa_ok, u.totp_secret_enc IS NOT NULL AS has_totp,
             d.name AS d_name, d.os, d.os_version, d.arch, d.hostname, d.home_dir, d.shell
      FROM devices d JOIN users u ON u.id = d.user_id
      WHERE d.id = $1 AND d.revoked_at IS NULL AND u.disabled_at IS NULL`,
@@ -160,34 +161,67 @@ export function authRoutes(app: FastifyInstance, pool: pg.Pool, cfg: AuthConfig)
     if (!userId) return reply.redirect('/?login=disabled');
     await logEvent(pool, userId, 'sign_in', req);
     await pool.query('DELETE FROM sessions WHERE expires_at < now()');
-    reply.setCookie(SESSION_COOKIE, await createSession(pool, userId, false), { ...cookieOpts, maxAge: SESSION_DAYS * 86400 });
+    // Two-factor is optional: accounts that turned it on must pass it before the session is usable.
+    const { rows } = await pool.query('SELECT totp_secret_enc IS NOT NULL AS has_totp FROM users WHERE id = $1', [userId]);
+    reply.setCookie(SESSION_COOKIE, await createSession(pool, userId, !rows[0].has_totp), { ...cookieOpts, maxAge: SESSION_DAYS * 86400 });
     return reply.redirect('/');
   });
 
-  // What the web app should show: sign-in, 2FA setup, 2FA code, or the app.
+  // What the web app should show: sign-in, the 2FA check, or the app.
   app.get('/auth/state', async (req) => {
     const u = await sessionUser(pool, req.cookies[SESSION_COOKIE]);
     if (!u) return { step: 'signed_out' };
-    const user = { email: u.email, name: u.name, role: u.role };
-    return { step: u.mfa_ok ? 'ready' : u.has_totp ? 'verify' : 'enroll', user };
+    const user = { email: u.email, name: u.name, role: u.role, has_totp: u.has_totp };
+    return { step: u.mfa_ok ? 'ready' : 'verify', user };
   });
 
-  // The routes below need a session that hasn't passed 2FA yet.
-  app.register(async (pending) => {
-    pending.addHook('preHandler', async (req, reply) => {
+  // Checks a TOTP or recovery code, with the lockout. Logs failures.
+  const checkCode = async (req: FastifyRequest, raw: string): Promise<{ ok: boolean; locked?: boolean }> => {
+    const { rows: fails } = await pool.query(
+      "SELECT count(*)::int AS n FROM auth_events WHERE user_id = $1 AND kind = '2fa_failed' AND created_at > now() - interval '15 minutes'",
+      [req.user.id],
+    );
+    if (fails[0].n >= MAX_MFA_FAILURES) return { ok: false, locked: true };
+    const code = raw.trim();
+    let ok = false;
+    if (/^\d{3}\s?\d{3}$/.test(code)) {
+      const { rows } = await pool.query('SELECT totp_secret_enc, totp_last_step FROM users WHERE id = $1', [req.user.id]);
+      if (!rows[0].totp_secret_enc) return { ok: false };
+      const step = verifyTotp(unseal(key(req.user), rows[0].totp_secret_enc, `totp:${req.user.id}`), code.replace(/\s/g, ''), Number(rows[0].totp_last_step));
+      // The WHERE clause makes the step update atomic, so two requests can't both use one code.
+      if (step !== null) ok = (await pool.query('UPDATE users SET totp_last_step = $2 WHERE id = $1 AND totp_last_step < $2', [req.user.id, step])).rowCount === 1;
+    } else {
+      ok = (await pool.query('DELETE FROM recovery_codes WHERE user_id = $1 AND code_hash = $2', [req.user.id, recoveryHash(code)])).rowCount === 1;
+      if (ok) await logEvent(pool, req.user.id, 'recovery_code_used', req);
+    }
+    if (!ok) await logEvent(pool, req.user.id, '2fa_failed', req);
+    return { ok };
+  };
+
+  // Sign-in step for accounts with 2FA on: upgrades the session (old token deleted, fresh one issued).
+  app.post('/auth/2fa/verify', { schema: { body: codeBody }, config: codeLimit }, async (req, reply) => {
+    const u = await sessionUser(pool, req.cookies[SESSION_COOKIE]);
+    if (!u || u.mfa_ok) return reply.code(401).send({ error: 'Please sign in again.' });
+    req.user = u;
+    const r = await checkCode(req, (req.body as { code: string }).code);
+    if (r.locked) return reply.code(429).send({ error: 'Too many wrong codes. Wait 15 minutes and try again.' });
+    if (!r.ok) return reply.code(400).send({ error: "That code didn't work." });
+    await logEvent(pool, u.id, '2fa_passed', req);
+    await pool.query('DELETE FROM sessions WHERE token_hash = $1', [hash(req.cookies[SESSION_COOKIE]!)]);
+    reply.setCookie(SESSION_COOKIE, await createSession(pool, u.id, true), { ...cookieOpts, maxAge: SESSION_DAYS * 86400 });
+    return { ok: true };
+  });
+
+  // Turning 2FA on and off from Settings. Browser session only, not a desktop device token.
+  app.register(async (acct) => {
+    acct.addHook('preHandler', async (req, reply) => {
       const u = await sessionUser(pool, req.cookies[SESSION_COOKIE]);
-      if (!u || u.mfa_ok) return reply.code(401).send({ error: 'Please sign in again.' });
+      if (!u?.mfa_ok || req.headers.authorization) return reply.code(401).send({ error: 'Please sign in.' });
       req.user = u;
     });
 
-    // Upgrades the session: the old token is deleted and a fresh 30-day one replaces it.
-    const finish = async (req: FastifyRequest, reply: FastifyReply) => {
-      await pool.query('DELETE FROM sessions WHERE token_hash = $1', [hash(req.cookies[SESSION_COOKIE]!)]);
-      reply.setCookie(SESSION_COOKIE, await createSession(pool, req.user.id, true), { ...cookieOpts, maxAge: SESSION_DAYS * 86400 });
-    };
-
-    pending.post('/auth/2fa/setup', async (req, reply) => {
-      if (req.user.has_totp) return reply.code(409).send({ error: 'Two-factor is already set up.' });
+    acct.post('/api/account/2fa/setup', async (req, reply) => {
+      if (req.user.has_totp) return reply.code(409).send({ error: 'Two-factor is already on.' });
       const secret = randomBytes(20);
       await pool.query('UPDATE users SET totp_pending_enc = $2 WHERE id = $1', [req.user.id, seal(key(req.user), secret, `totp:${req.user.id}`)]);
       const label = encodeURIComponent(`Harbor:${req.user.email}`);
@@ -195,8 +229,8 @@ export function authRoutes(app: FastifyInstance, pool: pg.Pool, cfg: AuthConfig)
       return { secret: base32(secret).replace(/(.{4})/g, '$1 ').trim(), qr: await QRCode.toString(uri, { type: 'svg', margin: 0 }) };
     });
 
-    pending.post('/auth/2fa/enroll', { schema: { body: codeBody }, config: codeLimit }, async (req, reply) => {
-      if (req.user.has_totp) return reply.code(409).send({ error: 'Two-factor is already set up.' });
+    acct.post('/api/account/2fa/enable', { schema: { body: codeBody }, config: codeLimit }, async (req, reply) => {
+      if (req.user.has_totp) return reply.code(409).send({ error: 'Two-factor is already on.' });
       const { rows } = await pool.query('SELECT totp_pending_enc FROM users WHERE id = $1', [req.user.id]);
       if (!rows[0].totp_pending_enc) return reply.code(400).send({ error: 'Start setup first.' });
       const secret = unseal(key(req.user), rows[0].totp_pending_enc, `totp:${req.user.id}`);
@@ -207,11 +241,7 @@ export function authRoutes(app: FastifyInstance, pool: pg.Pool, cfg: AuthConfig)
       const db = await pool.connect();
       try {
         await db.query('BEGIN');
-        await db.query('UPDATE users SET totp_secret_enc = $2, totp_pending_enc = NULL, totp_last_step = $3 WHERE id = $1', [
-          req.user.id,
-          rows[0].totp_pending_enc,
-          step,
-        ]);
+        await db.query('UPDATE users SET totp_secret_enc = $2, totp_pending_enc = NULL, totp_last_step = $3 WHERE id = $1', [req.user.id, rows[0].totp_pending_enc, step]);
         await db.query('DELETE FROM recovery_codes WHERE user_id = $1', [req.user.id]);
         for (const c of codes) await db.query('INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)', [req.user.id, recoveryHash(c)]);
         await db.query('COMMIT');
@@ -222,35 +252,18 @@ export function authRoutes(app: FastifyInstance, pool: pg.Pool, cfg: AuthConfig)
         db.release();
       }
       await logEvent(pool, req.user.id, '2fa_enabled', req);
-      await finish(req, reply);
       return { recoveryCodes: codes };
     });
 
-    pending.post('/auth/2fa/verify', { schema: { body: codeBody }, config: codeLimit }, async (req, reply) => {
-      if (!req.user.has_totp) return reply.code(400).send({ error: 'Set up two-factor first.' });
-      const { rows: fails } = await pool.query(
-        "SELECT count(*)::int AS n FROM auth_events WHERE user_id = $1 AND kind = '2fa_failed' AND created_at > now() - interval '15 minutes'",
-        [req.user.id],
-      );
-      if (fails[0].n >= MAX_MFA_FAILURES) return reply.code(429).send({ error: 'Too many wrong codes. Wait 15 minutes and try again.' });
-
-      const code = (req.body as { code: string }).code.trim();
-      let ok = false;
-      if (/^\d{3}\s?\d{3}$/.test(code)) {
-        const { rows } = await pool.query('SELECT totp_secret_enc, totp_last_step FROM users WHERE id = $1', [req.user.id]);
-        const step = verifyTotp(unseal(key(req.user), rows[0].totp_secret_enc, `totp:${req.user.id}`), code.replace(/\s/g, ''), Number(rows[0].totp_last_step));
-        // The WHERE clause makes the step update atomic, so two requests can't both use one code.
-        if (step !== null) ok = (await pool.query('UPDATE users SET totp_last_step = $2 WHERE id = $1 AND totp_last_step < $2', [req.user.id, step])).rowCount === 1;
-      } else {
-        ok = (await pool.query('DELETE FROM recovery_codes WHERE user_id = $1 AND code_hash = $2', [req.user.id, recoveryHash(code)])).rowCount === 1;
-        if (ok) await logEvent(pool, req.user.id, 'recovery_code_used', req);
-      }
-      if (!ok) {
-        await logEvent(pool, req.user.id, '2fa_failed', req);
-        return reply.code(400).send({ error: "That code didn't work." });
-      }
-      await logEvent(pool, req.user.id, '2fa_passed', req);
-      await finish(req, reply);
+    // Turning it off needs a current code, so a stolen session alone can't remove it.
+    acct.post('/api/account/2fa/disable', { schema: { body: codeBody }, config: codeLimit }, async (req, reply) => {
+      if (!req.user.has_totp) return reply.code(409).send({ error: 'Two-factor is already off.' });
+      const r = await checkCode(req, (req.body as { code: string }).code);
+      if (r.locked) return reply.code(429).send({ error: 'Too many wrong codes. Wait 15 minutes and try again.' });
+      if (!r.ok) return reply.code(400).send({ error: "That code didn't work." });
+      await pool.query('UPDATE users SET totp_secret_enc = NULL, totp_pending_enc = NULL WHERE id = $1', [req.user.id]);
+      await pool.query('DELETE FROM recovery_codes WHERE user_id = $1', [req.user.id]);
+      await logEvent(pool, req.user.id, '2fa_disabled', req);
       return { ok: true };
     });
   });
@@ -263,7 +276,6 @@ export function authRoutes(app: FastifyInstance, pool: pg.Pool, cfg: AuthConfig)
   });
 }
 
-// Returns the user's id, or null if the account is disabled.
 export async function upsertGoogleUser(pool: pg.Pool, cfg: AuthConfig, sub: string, email: string, name: string): Promise<string | null> {
   const id = randomUUID();
   const { rows } = await pool.query(

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, PROVIDER_HELP, usd, type Device, type Provider, type SavingSettings, type UsageTotals, type User } from './api.ts';
+import { CodeForm } from './Auth.tsx';
 import { isDesktop, policyGet, unlink } from './desktop.ts';
 
 export function Settings({ user, tab, setTab, onClose }: { user: User; tab: string; setTab: (t: string) => void; onClose: () => void }) {
@@ -175,6 +176,7 @@ function ProviderRow({ p, onChange }: { p: Provider; onChange: () => void }) {
 const eventLabel: Record<string, string> = {
   sign_in: 'Signed in with Google',
   '2fa_enabled': 'Turned on two-factor',
+  '2fa_disabled': 'Turned off two-factor',
   '2fa_passed': 'Passed two-factor check',
   '2fa_failed': 'Wrong two-factor code',
   recovery_code_used: 'Used a recovery code',
@@ -264,9 +266,9 @@ function Account({ user }: { user: User }) {
       <section className="kv">
         <span className="muted">Signed in as</span>
         <span>{user.email}</span>
-        <span className="muted">Two-factor</span>
-        <span>On</span>
       </section>
+
+      <TwoFactor initial={!!user.has_totp} />
 
       <section>
         <h2>Recent sign-in activity</h2>
@@ -385,5 +387,86 @@ function Admin() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function TwoFactor({ initial }: { initial: boolean }) {
+  const [on, setOn] = useState(initial);
+  const [step, setStep] = useState<'idle' | 'setup' | 'codes' | 'disable'>('idle');
+  const [setup, setSetup] = useState<{ secret: string; qr: string } | null>(null);
+  const [codes, setCodes] = useState<string[]>([]);
+  const [error, setError] = useState('');
+
+  const start = async () => {
+    setError('');
+    try {
+      setSetup(await api<{ secret: string; qr: string }>('/api/account/2fa/setup', { method: 'POST' }));
+      setStep('setup');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  return (
+    <section className="stack">
+      <div className="row" style={{ alignItems: 'center' }}>
+        <h2 style={{ margin: 0 }}>Two-factor sign-in</h2>
+        <span className="tag">{on ? 'On' : 'Off'}</span>
+        <span className="spacer" />
+        {step === 'idle' && !isDesktop && (
+          <button className="btn btn-small" onClick={on ? () => setStep('disable') : start}>
+            {on ? 'Turn off' : 'Turn on'}
+          </button>
+        )}
+      </div>
+      {error && <p className="form-error">{error}</p>}
+      {step === 'setup' && setup && (
+        <>
+          <div className="qr" dangerouslySetInnerHTML={{ __html: setup.qr }} />
+          <details className="secret">
+            <summary>Enter key manually</summary>
+            <code>{setup.secret}</code>
+          </details>
+          <CodeForm
+            label="Code from your authenticator app"
+            placeholder="123 456"
+            submit={async (code) => {
+              setCodes((await api<{ recoveryCodes: string[] }>('/api/account/2fa/enable', { method: 'POST', body: { code } })).recoveryCodes);
+              setOn(true);
+              setStep('codes');
+            }}
+          />
+          <button className="link muted" onClick={() => setStep('idle')}>Cancel</button>
+        </>
+      )}
+      {step === 'codes' && (
+        <>
+          <p className="muted">Recovery codes. Each works once and won’t be shown again.</p>
+          <ul className="recovery">
+            {codes.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+          <div className="row">
+            <button className="btn btn-small" onClick={() => navigator.clipboard.writeText(codes.join('\n'))}>Copy</button>
+            <button className="btn btn-small btn-primary" onClick={() => setStep('idle')}>Done</button>
+          </div>
+        </>
+      )}
+      {step === 'disable' && (
+        <>
+          <CodeForm
+            label="Authenticator or recovery code"
+            placeholder="123 456"
+            submit={async (code) => {
+              await api('/api/account/2fa/disable', { method: 'POST', body: { code } });
+              setOn(false);
+              setStep('idle');
+            }}
+          />
+          <button className="link muted" onClick={() => setStep('idle')}>Cancel</button>
+        </>
+      )}
+    </section>
   );
 }

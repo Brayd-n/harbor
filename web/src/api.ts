@@ -2,8 +2,8 @@ import { authFetch, isDesktop } from './desktop.ts';
 import { currentConn } from './live.ts';
 
 export type Device = { id: string; name: string; os: string; os_version: string; arch: string; hostname: string; home_dir: string; shell: string; last_seen?: string; current?: boolean };
-export type User = { email: string; name: string; role: 'owner' | 'user'; device?: Device | null };
-export type AuthState = { step: 'signed_out' } | { step: 'enroll' | 'verify' | 'ready'; user: User };
+export type User = { email: string; name: string; role: 'owner' | 'user'; has_totp?: boolean; device?: Device | null };
+export type AuthState = { step: 'signed_out' } | { step: 'verify' | 'ready'; user: User };
 
 export type Block =
   | { type: 'text' | 'thinking' | 'error' | 'note'; text: string }

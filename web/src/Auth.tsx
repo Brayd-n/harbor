@@ -45,7 +45,7 @@ export function SignIn() {
   );
 }
 
-function CodeForm({ label, submit, placeholder, autoFocus = true }: { label: string; submit: (code: string) => Promise<void>; placeholder: string; autoFocus?: boolean }) {
+export function CodeForm({ label, submit, placeholder, autoFocus = true }: { label: string; submit: (code: string) => Promise<void>; placeholder: string; autoFocus?: boolean }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -81,64 +81,6 @@ function CodeForm({ label, submit, placeholder, autoFocus = true }: { label: str
         {busy ? 'Checking…' : 'Continue'}
       </button>
     </form>
-  );
-}
-
-export function Enroll({ user, onDone }: { user: User; onDone: () => void }) {
-  const [setup, setSetup] = useState<{ secret: string; qr: string } | null>(null);
-  const [codes, setCodes] = useState<string[] | null>(null);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    api<{ secret: string; qr: string }>('/auth/2fa/setup', { method: 'POST' }).then(setSetup, (e) => setError(e.message));
-  }, []);
-
-  if (codes) {
-    const download = () => {
-      const blob = new Blob([`Harbor recovery codes for ${user.email}\nEach code works once.\n\n${codes.join('\n')}\n`], { type: 'text/plain' });
-      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'harbor-recovery-codes.txt' });
-      a.click();
-      URL.revokeObjectURL(a.href);
-    };
-    return (
-      <Frame>
-        <h1 className="auth-h">Save your recovery codes</h1>
-        <p className="auth-lede">Each one works once if you lose your phone. They won’t be shown again.</p>
-        <ul className="recovery">
-          {codes.map((c) => (
-            <li key={c}>{c}</li>
-          ))}
-        </ul>
-        <div className="row">
-          <button className="btn" onClick={download}>Download</button>
-          <button className="btn" onClick={() => navigator.clipboard.writeText(codes.join('\n'))}>Copy</button>
-          <button className="btn btn-primary" onClick={onDone}>I’ve saved them</button>
-        </div>
-      </Frame>
-    );
-  }
-
-  return (
-    <Frame>
-      <h1 className="auth-h">Set up two-factor sign-in</h1>
-      <p className="auth-lede">Scan with your authenticator app, then enter the code.</p>
-      {error && <p className="form-error">{error}</p>}
-      {setup && (
-        <>
-          <div className="qr" dangerouslySetInnerHTML={{ __html: setup.qr }} />
-          <details className="secret">
-            <summary>Can’t scan? Enter this key instead</summary>
-            <code>{setup.secret}</code>
-          </details>
-          <CodeForm
-            label="Code from your app"
-            placeholder="123 456"
-            autoFocus={false}
-            submit={async (code) => setCodes((await api<{ recoveryCodes: string[] }>('/auth/2fa/enroll', { method: 'POST', body: { code } })).recoveryCodes)}
-          />
-        </>
-      )}
-      <SignOutLink />
-    </Frame>
   );
 }
 
