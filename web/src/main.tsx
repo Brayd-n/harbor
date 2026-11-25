@@ -9,40 +9,55 @@ import { hasLink, isDesktop } from './desktop.ts';
 import { ApproveLink, LinkDevice } from './Link.tsx';
 import { Shell } from './Shell.tsx';
 
-// A /link?code=… visit survives the Google sign-in round trip.
+// A /link?code=… visit made while signed out survives the Google sign-in round trip, once.
 const LINK_KEY = 'pending-link';
-if (location.pathname === '/link') {
+const takePendingLink = () => {
   try {
-    sessionStorage.setItem(LINK_KEY, location.search);
-  } catch {}
-}
+    const v = sessionStorage.getItem(LINK_KEY);
+    sessionStorage.removeItem(LINK_KEY);
+    return v;
+  } catch {
+    return null;
+  }
+};
 
 function WebApp() {
   const [state, setState] = useState<AuthState | null>(null);
-  const [linking, setLinking] = useState(() => {
-    try {
-      return sessionStorage.getItem(LINK_KEY);
-    } catch {
-      return null;
-    }
-  });
+  const [path, setPath] = useState(location.pathname);
   const load = () => api<AuthState>('/auth/state').then(setState, () => setState({ step: 'signed_out' }));
   useEffect(() => {
     load();
+    const onPop = () => setPath(location.pathname);
+    addEventListener('popstate', onPop);
+    return () => removeEventListener('popstate', onPop);
   }, []);
+  useEffect(() => {
+    if (!state) return;
+    if (state.step !== 'ready') {
+      if (location.pathname === '/link') {
+        try {
+          sessionStorage.setItem(LINK_KEY, location.search);
+        } catch {}
+      }
+      return;
+    }
+    const saved = takePendingLink();
+    if (saved !== null && location.pathname !== '/link') {
+      history.replaceState(null, '', `/link${saved}`);
+      setPath('/link');
+    }
+  }, [state]);
 
   if (!state) return null;
   if (state.step === 'signed_out') return <SignIn />;
   if (state.step === 'enroll') return <Enroll user={state.user} onDone={load} />;
   if (state.step === 'verify') return <Verify user={state.user} onDone={load} />;
-  if (linking !== null) {
-    if (location.pathname !== '/link') history.replaceState(null, '', `/link${linking}`);
+  if (path === '/link') {
     return (
       <ApproveLink
         onDone={() => {
-          sessionStorage.removeItem(LINK_KEY);
-          history.replaceState(null, '', '/');
-          setLinking(null);
+          history.pushState(null, '', '/');
+          setPath('/');
         }}
       />
     );

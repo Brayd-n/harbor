@@ -93,9 +93,6 @@ export function ApproveLink({ onDone }: { onDone: () => void }) {
   const approve = async () => {
     try {
       await api('/api/devices/link', { method: 'POST', body: { code: code.trim(), name: name.trim() } });
-      try {
-        sessionStorage.removeItem('pending-link'); // done; later visits open the app as usual
-      } catch {}
       setDone(true);
     } catch (err) {
       setError((err as Error).message);
@@ -148,6 +145,9 @@ export function ApproveLink({ onDone }: { onDone: () => void }) {
           <input id="code" className="code-input" value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" />
           <button className="btn btn-primary btn-wide" disabled={!code.trim()}>
             Continue
+          </button>
+          <button type="button" className="link muted" onClick={onDone}>
+            Cancel
           </button>
           {error && <p className="form-error">{error}</p>}
         </form>
