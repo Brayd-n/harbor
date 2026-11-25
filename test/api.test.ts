@@ -108,11 +108,13 @@ test('provider keys are encrypted at rest and never returned', async () => {
 test('a chat turn streams the reply with the user’s own key and saves it', async () => {
   const realFetch = globalThis.fetch;
   let sentKey = '';
+  let sentBody: Record<string, unknown> = {};
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     if (!String(url).includes('api.anthropic.com')) return realFetch(url, init);
     sentKey = new Headers(init?.headers).get('x-api-key') ?? '';
+    sentBody = JSON.parse(String(init?.body));
     const events = [
-      ['message_start', { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-test', content: [], stop_reason: null, usage: { input_tokens: 7, output_tokens: 0 } } }],
+      ['message_start', { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-test', content: [], stop_reason: null, usage: { input_tokens: 7, output_tokens: 0, cache_read_input_tokens: 1200, cache_creation_input_tokens: 0 } } }],
       ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
       ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello ' } }],
       ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'there.' } }],
@@ -128,13 +130,15 @@ test('a chat turn streams the reply with the user’s own key and saves it', asy
     const r = await as('alice', 'POST', `/api/chats/${chat.id}/messages`, { text: 'Say hello', model: 'anthropic:claude-test' });
     assert.equal(r.statusCode, 200);
     assert.equal(sentKey, 'sk-ant-alice-1234');
+    assert.deepEqual(sentBody.cache_control, { type: 'ephemeral' }, 'prompt caching is on');
     const events = r.body.split('\n\n').filter(Boolean).map((l) => JSON.parse(l.slice(6)));
     assert.equal(events.filter((e) => e.t === 'text').map((e) => e.d).join(''), 'Hello there.');
     assert.deepEqual(events.at(-1).message.content, [{ type: 'text', text: 'Hello there.' }]);
     const saved = (await as('alice', 'GET', `/api/chats/${chat.id}`)).json();
     assert.equal(saved.title, 'Say hello');
     assert.equal(saved.messages.length, 2);
-    assert.deepEqual(saved.messages[1].usage, { input: 7, output: 2 });
+    assert.equal(saved.messages[1].usage.cacheRead, 1200);
+    assert.equal(saved.messages[1].usage.output, 2);
   } finally {
     globalThis.fetch = realFetch;
   }

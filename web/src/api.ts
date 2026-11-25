@@ -2,7 +2,7 @@ export type User = { email: string; name: string; role: 'owner' | 'user' };
 export type AuthState = { step: 'signed_out' } | { step: 'enroll' | 'verify' | 'ready'; user: User };
 
 export type Block = { type: 'text' | 'thinking' | 'error'; text: string };
-export type Message = { id: string; role: 'user' | 'assistant'; content: Block[]; model?: string | null; usage?: { input: number | null; output: number | null } | null; created_at: string };
+export type Message = { id: string; role: 'user' | 'assistant'; content: Block[]; model?: string | null; usage?: { input: number | null; output: number | null; cacheRead?: number | null } | null; created_at: string };
 export type ChatSummary = { id: string; title: string; model: string; updated_at: string };
 export type Chat = ChatSummary & { messages: Message[] };
 export type Model = { id: string; provider: string; name: string; vision: boolean; reasoning: boolean; tools: boolean; context: number | null; cost: { input: number; output: number } | null };

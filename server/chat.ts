@@ -92,6 +92,7 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
           messages: toModelMessages(setup.history),
           abortSignal: AbortSignal.any([abort.signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]),
           maxRetries: 1,
+          providerOptions: cacheOptions(provider, modelId),
           // The SDK's default logs the whole error, which can include the chat text it sent. Errors
           // already reach the user through the stream, so nothing is logged here.
           onError: () => {},
@@ -106,7 +107,13 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
           } else if (part.type === 'error') {
             failure = errorText(part.error);
           } else if (part.type === 'finish') {
-            usage = { input: part.totalUsage.inputTokens ?? null, output: part.totalUsage.outputTokens ?? null };
+            const u = part.totalUsage;
+            usage = {
+              input: u.inputTokens ?? null,
+              output: u.outputTokens ?? null,
+              cacheRead: u.inputTokenDetails?.cacheReadTokens ?? null,
+              cacheWrite: u.inputTokenDetails?.cacheWriteTokens ?? null,
+            };
           }
         }
       } catch (e) {
@@ -138,6 +145,16 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
       res.end();
     },
   );
+}
+
+// Prompt caching: each turn resends the whole chat, so the provider can bill the part it saw last
+// turn at roughly a tenth of the input price. Anthropic needs it switched on (automatic mode puts the
+// cache point after the newest message); OpenAI, Google and DeepSeek-style APIs cache on their own.
+export function cacheOptions(provider: string, modelId: string): Record<string, Record<string, { type: 'ephemeral' }>> | undefined {
+  const ephemeral = { type: 'ephemeral' as const };
+  if (provider === 'openrouter') return modelId.startsWith('anthropic/') ? { openrouter: { cache_control: ephemeral } } : undefined;
+  // Covers Anthropic itself and OpenCode Go models served through the Anthropic API style.
+  return { anthropic: { cacheControl: ephemeral } };
 }
 
 // Provider errors go to the user, but trimmed and never with a stack.

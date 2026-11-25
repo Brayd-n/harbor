@@ -338,6 +338,7 @@ function MessageView({ m, models }: { m: Message; models: Model[] | null }) {
       <footer className="msg-meta">
         <span>{name}</span>
         {m.usage?.output != null && <span>{m.usage.output.toLocaleString()} tokens</span>}
+        {!!m.usage?.cacheRead && <span title="Input tokens billed at the cached rate">{m.usage.cacheRead.toLocaleString()} cached</span>}
         {text && <CopyButton text={text} />}
       </footer>
     </article>
