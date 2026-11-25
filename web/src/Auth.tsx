@@ -41,7 +41,6 @@ export function SignIn() {
       <a className="btn btn-primary btn-wide" href="/auth/google">
         <GoogleIcon /> Continue with Google
       </a>
-      <p className="auth-note">Every account needs an authenticator app for two-factor sign-in.</p>
     </Frame>
   );
 }
@@ -103,7 +102,7 @@ export function Enroll({ user, onDone }: { user: User; onDone: () => void }) {
     return (
       <Frame>
         <h1 className="auth-h">Save your recovery codes</h1>
-        <p className="auth-lede">If you lose your phone, each of these lets you sign in once. They won’t be shown again.</p>
+        <p className="auth-lede">Each one works once if you lose your phone. They won’t be shown again.</p>
         <ul className="recovery">
           {codes.map((c) => (
             <li key={c}>{c}</li>
@@ -121,7 +120,7 @@ export function Enroll({ user, onDone }: { user: User; onDone: () => void }) {
   return (
     <Frame>
       <h1 className="auth-h">Set up two-factor sign-in</h1>
-      <p className="auth-lede">Scan this with an authenticator app (1Password, Bitwarden, Google Authenticator, Aegis), then enter the 6-digit code it shows.</p>
+      <p className="auth-lede">Scan with your authenticator app, then enter the code.</p>
       {error && <p className="form-error">{error}</p>}
       {setup && (
         <>

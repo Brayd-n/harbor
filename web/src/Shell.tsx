@@ -92,7 +92,6 @@ export function Shell({ user }: { user: User }) {
               ))}
             </section>
           ))}
-          {!chats.length && <p className="nav-empty">Your chats will show up here.</p>}
         </nav>
         <button className="nav-user" onClick={() => setSettings('providers')}>
           <span className="avatar" aria-hidden>{(user.name || user.email)[0].toUpperCase()}</span>
@@ -257,8 +256,7 @@ function ChatView(props: {
               {noKeys ? (
                 <>
                   <h1>Add an API key to start</h1>
-                  <p>Harbor uses your own keys from Anthropic, OpenAI, Google, OpenRouter, or your OpenCode Go plan. They’re encrypted on the server and never shown again.</p>
-                  <button className="btn btn-primary" onClick={props.openSettings}>Add a key</button>
+                  <button className="btn btn-primary" onClick={props.openSettings}>Add key</button>
                 </>
               ) : (
                 <h1>What are we working on?</h1>
@@ -447,7 +445,7 @@ function Composer({ disabled, busy, onSend, onStop, picker }: { disabled: boolea
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
-          placeholder={disabled ? 'Add an API key in Settings to start' : 'Message'}
+          placeholder={disabled ? 'Add an API key to start' : 'Message'}
           disabled={disabled}
           aria-label="Message"
           maxLength={100_000}
@@ -465,7 +463,6 @@ function Composer({ disabled, busy, onSend, onStop, picker }: { disabled: boolea
           )}
         </div>
       </div>
-      <p className="composer-hint">Enter to send, Shift+Enter for a new line</p>
     </div>
   );
 }
@@ -528,12 +525,11 @@ function ModelPicker({ models, value, onChange }: { models: Model[]; value: stri
                 <span className={`dot p-${m.provider}`} aria-hidden />
                 <span className="picker-name">{m.name}</span>
                 <span className="picker-meta">{providerName[m.provider]}</span>
-                <span className="picker-price">{m.cost ? `$${m.cost.input} / $${m.cost.output}` : ''}</span>
+                <span className="picker-price" title="$ per million tokens, in / out">{m.cost ? `$${m.cost.input} / $${m.cost.output}` : ''}</span>
               </li>
             ))}
             {!list.length && <li className="picker-none">No models match “{q}”</li>}
           </ul>
-          <p className="picker-foot">Prices are dollars per million input/output tokens.</p>
         </div>
       )}
     </div>

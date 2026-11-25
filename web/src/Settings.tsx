@@ -45,7 +45,6 @@ function Providers() {
   }, []);
   return (
     <div className="stack">
-      <p className="muted">Keys are encrypted with a key unique to your account before they’re stored, and they’re never sent back to the browser. Model calls go from the server straight to the provider.</p>
       {list.map((p) => (
         <ProviderRow key={p.id} p={p} onChange={load} />
       ))}
@@ -180,7 +179,7 @@ function Account({ user }: { user: User }) {
 
       <section className="danger-zone">
         <h2>Delete account</h2>
-        <p className="muted">Deletes your chats, API keys and sign-in history from Harbor. This can’t be undone.</p>
+        <p className="muted">Deletes everything. This can’t be undone.</p>
         <button
           className="btn btn-danger"
           onClick={async () => {
@@ -207,7 +206,6 @@ function Admin() {
   }, []);
   return (
     <div className="stack">
-      <p className="muted">{users.length} accounts. Disabling an account signs it out everywhere and blocks new sign-ins.</p>
       <table className="events admin">
         <thead>
           <tr>
