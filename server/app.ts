@@ -23,7 +23,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
+  "img-src 'self' data: blob:",
   "font-src 'self'",
   "connect-src 'self'",
   "object-src 'none'",
@@ -76,7 +76,9 @@ export function buildApp(pool: pg.Pool, cfg: Config, hub = new Hub()) {
 
   app.addHook('onSend', async (req, reply) => {
     // Built JS/CSS/font file names contain a content hash, so browsers can keep them.
-    if (req.url.startsWith('/assets/')) reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+    if (req.url.startsWith('/assets/') && reply.statusCode === 200 && !String(reply.getHeader('content-type')).startsWith('text/html')) {
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+    }
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');

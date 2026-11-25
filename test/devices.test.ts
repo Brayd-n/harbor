@@ -228,6 +228,7 @@ test('Code mode: tool requests go only to the window that sent the message, on i
     );
     const r = await req(dev('a1'), 'POST', `/api/chats/${chat.id}/messages`, { text: 'What does the README say?', model: 'anthropic:claude-test' }, { 'x-harbor-conn': a1.connId });
     assert.equal(r.statusCode, 200, r.body);
+    assert.equal(r.headers['access-control-allow-origin'], 'tauri://localhost', 'the stream carries CORS for the desktop app');
     const events = r.body.split('\n\n').filter(Boolean).map((l) => JSON.parse(l.slice(6)));
     assert.equal(events.find((e) => e.t === 'tool_result').output, '# hello', 'the forged answers were ignored');
     assert.equal(events.at(-1).t, 'done');

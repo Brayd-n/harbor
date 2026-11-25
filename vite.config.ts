@@ -7,5 +7,5 @@ export default defineConfig({
   // assetsInlineLimit 0: no data: URIs for fonts, so the CSP can stay at font-src 'self'.
   build: { outDir: '../dist', emptyOutDir: true, assetsInlineLimit: 0 },
   // `npm run dev` (API on :3300) + `npm run dev:web` (this, on :5173)
-  server: { proxy: { '/api': 'http://localhost:3300', '/auth': 'http://localhost:3300' } },
+  server: { proxy: { '/api': 'http://localhost:3300', '/auth': 'http://localhost:3300', '/ws': { target: 'ws://localhost:3300', ws: true } } },
 });

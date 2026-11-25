@@ -138,7 +138,8 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
       // other open windows over the WebSocket hub.
       reply.hijack();
       const res = reply.raw;
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
+      // Keep headers set by hooks so far (CORS for the desktop app).
+      res.writeHead(200, { ...(reply.getHeaders() as Record<string, string>), 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
       const send = (o: object) => {
         res.write(`data: ${JSON.stringify(o)}\n\n`);
         hub.broadcast(userId, { t: 'chat', chatId: id, e: o }, connId);

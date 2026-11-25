@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, PROVIDER_HELP, usd, type Provider, type SavingSettings, type UsageTotals, type User } from './api.ts';
+import { api, PROVIDER_HELP, usd, type Device, type Provider, type SavingSettings, type UsageTotals, type User } from './api.ts';
+import { isDesktop, policyGet, unlink } from './desktop.ts';
 
 export function Settings({ user, tab, setTab, onClose }: { user: User; tab: string; setTab: (t: string) => void; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -9,6 +10,7 @@ export function Settings({ user, tab, setTab, onClose }: { user: User; tab: stri
   const tabs: [string, string][] = [
     ['providers', 'API keys'],
     ['saving', 'Saving'],
+    ['devices', 'Devices'],
     ['account', 'Account'],
     ...(user.role === 'owner' ? [['admin', 'Users'] as [string, string]] : []),
   ];
@@ -31,6 +33,7 @@ export function Settings({ user, tab, setTab, onClose }: { user: User; tab: stri
         <div className="settings-body">
           {tab === 'providers' && <Providers />}
           {tab === 'saving' && <Saving />}
+          {tab === 'devices' && <Devices />}
           {tab === 'account' && <Account user={user} />}
           {tab === 'admin' && <Admin />}
         </div>
@@ -175,7 +178,81 @@ const eventLabel: Record<string, string> = {
   '2fa_passed': 'Passed two-factor check',
   '2fa_failed': 'Wrong two-factor code',
   recovery_code_used: 'Used a recovery code',
+  device_linked: 'Linked a device',
+  device_revoked: 'Unlinked a device',
+  refresh_token_reused: 'Device token reused; device unlinked',
 };
+
+function Devices() {
+  const [list, setList] = useState<Device[]>([]);
+  const [policy, setPolicy] = useState<Awaited<ReturnType<typeof policyGet>> | null>(null);
+  const load = () => api<Device[]>('/api/devices').then(setList);
+  useEffect(() => {
+    load();
+    if (isDesktop) policyGet().then(setPolicy);
+  }, []);
+  return (
+    <div className="stack">
+      <table className="events">
+        <thead>
+          <tr>
+            <th>Device</th>
+            <th>System</th>
+            <th>Last seen</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((d) => (
+            <tr key={d.id}>
+              <td>
+                {d.name}
+                {d.current && <span className="tag">this device</span>}
+              </td>
+              <td className="muted">
+                {d.os} {d.os_version} · {d.shell || 'no shell found'}
+              </td>
+              <td className="muted">{d.last_seen ? new Date(d.last_seen).toLocaleString() : ''}</td>
+              <td>
+                {!d.current && (
+                  <button
+                    className="btn btn-small btn-danger-ghost"
+                    onClick={async () => {
+                      if (!confirm(`Unlink ${d.name}? It will need to be linked again.`)) return;
+                      await api(`/api/devices/${d.id}`, { method: 'DELETE' });
+                      load();
+                    }}
+                  >
+                    Unlink
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!isDesktop && (
+        <a className="btn" href="/link">
+          Link a device
+        </a>
+      )}
+      {policy && (
+        <section>
+          <h2>Local policy</h2>
+          <p className="muted small mono">{policy[1]}</p>
+          <section className="kv">
+            <span className="muted">Folders</span>
+            <span className="mono small">{policy[0].workspaces.join('\n') || 'None'}</span>
+            <span className="muted">Always allowed</span>
+            <span className="mono small">{policy[0].allow_commands.join('\n') || 'None'}</span>
+            <span className="muted">Extra deny rules</span>
+            <span className="mono small">{policy[0].deny_commands.join('\n') || 'None'}</span>
+          </section>
+        </section>
+      )}
+    </div>
+  );
+}
 
 function Account({ user }: { user: User }) {
   const [events, setEvents] = useState<{ kind: string; ip: string; user_agent: string; created_at: string }[]>([]);
@@ -207,9 +284,22 @@ function Account({ user }: { user: User }) {
       </section>
 
       <section className="actions">
-        <button className="btn" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => location.assign('/'))}>
-          Sign out
-        </button>
+        {isDesktop ? (
+          <button
+            className="btn"
+            onClick={async () => {
+              if (user.device) await api(`/api/devices/${user.device.id}`, { method: 'DELETE' }).catch(() => {});
+              await unlink();
+              location.reload();
+            }}
+          >
+            Unlink this device
+          </button>
+        ) : (
+          <button className="btn" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => location.assign('/'))}>
+            Sign out
+          </button>
+        )}
         <button
           className="btn"
           onClick={async () => {
@@ -220,9 +310,11 @@ function Account({ user }: { user: User }) {
         >
           Sign out everywhere
         </button>
-        <a className="btn" href="/api/account/export" download>
-          Export my data
-        </a>
+        {!isDesktop && (
+          <a className="btn" href="/api/account/export" download>
+            Export my data
+          </a>
+        )}
       </section>
 
       <section className="danger-zone">

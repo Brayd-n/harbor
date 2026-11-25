@@ -2,6 +2,7 @@
 FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY apps/desktop/package.json apps/desktop/
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npx vite build && npm prune --omit=dev

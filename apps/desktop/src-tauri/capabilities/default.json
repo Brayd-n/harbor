@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The bundled UI only. No remote page can call these.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

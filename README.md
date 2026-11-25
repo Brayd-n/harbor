@@ -1,8 +1,8 @@
 # Harbor
 
-A self-hosted AI chat app. Sign in with Google, add your own API keys, and chat with models from Anthropic, OpenAI, Google, OpenRouter and your OpenCode Go plan in one place. Your history is stored on your own server, so it's the same on every device.
+A self-hosted AI chat app with a coding agent. Sign in with Google, add your own API keys, and chat with models from Anthropic, OpenAI, Google, OpenRouter and your OpenCode Go plan in one place. Your history is stored on your own server, so it's the same on every device.
 
-This is the first milestone (web chat). Next comes a desktop app with an agent mode that works on files and a coding mode for project folders, with tools that run on your own machine. See the roadmap below.
+The desktop app (Windows and Linux) adds **Code mode**: an agent that reads, edits and runs commands in a project folder on the machine you're sitting at, with your approval for every write and command. Start a session on one computer and continue it on another.
 
 "Harbor" is a working name.
 
@@ -21,6 +21,35 @@ This is the first milestone (web chat). Next comes a desktop app with an agent m
 - **Required two-factor sign-in** for every account, with recovery codes.
 - **Export and delete.** Download all your chats as JSON, or delete your account and everything in it.
 - **Owner admin page** to see accounts and disable one.
+- **Image attachments**, shrunk in the app before upload (longest side 1568 px, WebP), since image tokens scale with pixels. Images go to the model only with the newest messages.
+
+## Desktop app and Code mode
+
+The desktop app is [Tauri 2](https://tauri.app): the same React UI as the web app (bundled into the app, not loaded from the server) plus a Rust side that runs the tools.
+
+- **Linking.** The app shows a code and opens `/link` in your browser, where you're already signed in with 2FA; you approve the device there. The app gets a refresh token bound to that device, kept in the OS keychain (Secret Service on Linux, Credential Manager on Windows). No password is ever typed into the app. Access tokens last 15 minutes; refresh tokens rotate on every use, and presenting an old one revokes the device. Devices are listed and revocable in Settings → Devices; revoking one closes its connections at once.
+- **Where commands run.** The app reports its OS, version, architecture, hostname, home folder and shell (PowerShell 7 `pwsh` on Windows, bash on Linux) when it links and every time it connects. The server puts an environment block for the device you're typing on into the system prompt, so the model writes commands for the right shell, and adds a note to the chat when you continue it on another machine. The top bar always shows the device, shell and folder.
+- **Live sync.** A WebSocket hub streams every reply to all your open windows: start a turn on one machine and watch it on another.
+- **Tools:** `read_file` (by line range), `edit_file` (exact string replace), `write_file`, `glob`, `grep` (both respect `.gitignore`), and `shell`. A project has a folder per device.
+- **Token saving in Code mode.** Compaction, prompt caching and the savings meter work as in chat (every step of a tool loop is priced, and cache savings add up across steps). Shell output is cut to its first and last 15 KB. Tool use from earlier turns is replayed to the model as one line per call instead of the full output, since old file contents and logs are stale and are most of a coding chat's tokens.
+
+### Tool safety
+
+The agent loop runs on the server, so the server can *ask* your computer to run things. The design treats the server as untrusted for that purpose: **the desktop app is the enforcement point.**
+
+| Rule | Where it's enforced |
+|---|---|
+| Tool requests go only to the window that sent your message, on the device that owns it, for a chat its user owns. A result from any other connection is ignored. | Server (hub), tested |
+| The folder must be one you opened on that device with the native folder picker. The server names a folder; the app refuses any it didn't pick. | App (Rust) |
+| Reads inside the folder run without asking. Every write and every command shows an approval card with the exact command or change, the folder and the shell. Nothing paraphrased by the model. | App |
+| Paths are canonicalized (symlinks and junctions resolved) and must stay inside the folder. Never a string prefix check. | App, tested |
+| Hard deny list: `.ssh`, `.gnupg`, cloud credentials, keyrings, browser profiles and Harbor's own policy file; commands like `rm -rf /`, `mkfs`, `Format-Volume`, registry edits, `curl … \| sh`. Approving can't override it. | App, tested |
+| The permission policy is a local file (`~/.config/harbor/policy.json`, `%APPDATA%\harbor\policy.json`). The server has no way to change it. | App |
+| Shell commands time out (2 min by default), kill their whole process tree, and keep only the head and tail of their output. | App, tested |
+| Every request and its decision (auto, approved, declined, blocked) lands in an audit log, shown per chat. | Server |
+| Tool output goes back to the model as data, and the system prompt says it is never an instruction. | Server |
+
+The deny list for commands is a speed bump, not the boundary: a shell can always be talked into something a pattern misses. The boundary is that every command waits for your click. Known gaps, for later milestones: no sandbox around approved commands, and no checkpoint/undo for edits.
 
 ## Security
 
@@ -34,7 +63,11 @@ Anyone can sign up, so the design assumes some users are hostile.
 | Session theft from the database | Only SHA-256 hashes of session tokens are stored. Cookies are `__Host-`, HttpOnly, Secure, SameSite=Lax. |
 | CSRF | Every non-GET request must carry our own `Origin`. |
 | A model reply running script in your browser | Replies are rendered with `react-markdown`: no raw HTML, no `javascript:` links, images shown as links. The CSP allows scripts only from our own origin, with no inline script. |
-| Abuse | Per-route rate limits, at most two replies in progress per user, message size limits, and the owner can disable accounts. |
+| Abuse | Per-route rate limits, at most two replies in progress per user, message size limits, a 200 MB image quota, and the owner can disable accounts. |
+| One user reaching another's devices | Devices, projects, folders, images and the audit log are under the same row-level security; folder rows must point at a device of the same user (composite foreign key). Tests try to list, revoke, re-path and route through another user's devices. |
+| A stolen desktop token | Refresh tokens are stored hashed, rotate on use, and reuse revokes the device. The desktop API uses bearer tokens only (no cookies), with CORS open to the app's own origin and nothing else. |
+| Cross-site WebSocket hijacking | Browser sockets must come from our own origin; the desktop app authenticates its socket with a token in the first message, never in the URL. |
+| A spoofed image | The type comes from the file's magic bytes, not its name or header. |
 | Container escape / lateral movement | The app runs as a non-root user with a read-only filesystem, no Linux capabilities, `no-new-privileges`, and memory limits. Postgres has no published port. |
 
 Sign-in uses the OpenID Connect authorization-code flow with PKCE, `state` and `nonce`, written directly against Node's standard library, as is TOTP (RFC 6238).
@@ -47,6 +80,7 @@ Sign-in uses the OpenID Connect authorization-code flow with PKCE, `state` and `
 | Database | PostgreSQL 17 with row-level security, plain SQL via `pg` |
 | Models | [AI SDK](https://ai-sdk.dev) provider packages, catalog from models.dev |
 | Frontend | React 19 + Vite, Geist and JetBrains Mono, no UI kit |
+| Desktop | Tauri 2 (Rust): `keyring`, `ignore`/`globset`/`regex` for the file tools, std::process for the shell |
 | Hosting | Docker Compose behind Caddy on a small VPS. The app container idles at about 85 MB. |
 
 ## Run it locally
@@ -61,10 +95,24 @@ PGHOST=127.0.0.1 PGPORT=55432 PGUSER=postgres PGPASSWORD=dev PGDATABASE=harbor \
 
 Google sign-in needs an OAuth client (below). For local testing without one, `node scripts/dev-session.ts you@example.com` prints a session token you can set as the `__Host-session` cookie on `http://localhost:3300`.
 
+### Desktop app
+
+Needs Rust and, on Linux, the WebKitGTK build libraries:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libgtk-3-dev librsvg2-dev
+npm run desktop -- build --bundles deb   # or: npm run desktop -- dev
+```
+
+On first start, set the server (for local testing `http://localhost:3300`), then approve the code in the browser. Windows needs PowerShell 7 (`winget install Microsoft.PowerShell`).
+
+Releases: pushing a `v*` tag builds the Windows installer, AppImage and .deb in GitHub Actions and attaches them to a draft release with Tauri updater signatures. It needs the repository secrets `TAURI_SIGNING_PRIVATE_KEY` (from `npx tauri signer generate`) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public key is in `apps/desktop/src-tauri/tauri.conf.json`. The builds aren't code-signed yet, so Windows shows a SmartScreen prompt on first install.
+
 Tests need a Postgres they can wipe:
 
 ```bash
 PGHOST=127.0.0.1 PGPORT=55432 PGUSER=postgres PGPASSWORD=dev PGDATABASE=harbor npm test
+cd apps/desktop/src-tauri && cargo test   # tool and policy tests
 ```
 
 ## Deploy
@@ -80,7 +128,7 @@ PGHOST=127.0.0.1 PGPORT=55432 PGUSER=postgres PGPASSWORD=dev PGDATABASE=harbor n
        reverse_proxy 127.0.0.1:8083 {
            flush_interval -1
        }
-       @compress not path /api/chats/*/messages
+       @compress not path /api/chats/*/messages /ws
        encode @compress zstd gzip
        header Strict-Transport-Security "max-age=31536000"
    }
@@ -91,8 +139,8 @@ PGHOST=127.0.0.1 PGPORT=55432 PGUSER=postgres PGPASSWORD=dev PGDATABASE=harbor n
 
 ## Roadmap
 
-- **M0 (this):** web chat, accounts, 2FA, bring-your-own-keys, row-level security.
-- **M1:** Tauri desktop app for Windows and Linux. Device linking, OS detection (PowerShell 7 or bash), a Code mode that edits files and runs commands in a project folder with approval prompts and an audit log, live sync between devices over WebSocket, image attachments.
+- **M0:** web chat, accounts, 2FA, bring-your-own-keys, row-level security.
+- **M1 (this):** Tauri desktop app for Windows and Linux. Device linking, OS detection (PowerShell 7 or bash), a Code mode that edits files and runs commands in a project folder with approval prompts and an audit log, live sync between devices over WebSocket, image attachments.
 - **M2:** Cowork mode, WSL bash on Windows, more providers, cost tracking, custom modes and system prompts, MCP tools, theme and keybind editors.
 - **M3:** passkeys, shell sandboxing, voice input, signed auto-updates.
 

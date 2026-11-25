@@ -337,3 +337,95 @@ button.top-title:hover { background: var(--surface); }
 }
 .switch[aria-checked='true'] { background: var(--accent); box-shadow: none; }
 .switch[aria-checked='true']::after { transform: translateX(16px); background: var(--accent-ink); }
+
+/* ---------- desktop and Code mode ---------- */
+.mono { font-family: var(--mono); }
+.text-input {
+  height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); outline: none;
+}
+.text-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+.link-code { display: flex; align-items: center; justify-content: center; font-size: 28px; user-select: all; }
+
+.modes { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; gap: 3px; border-radius: 9px; background: var(--surface); border: 1px solid var(--line); }
+.modes button { border: 0; background: none; padding: 5px 0; border-radius: 6px; cursor: pointer; color: var(--muted); font-size: 13.5px; font-weight: 500; }
+.modes button.on { background: var(--surface-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+
+.device-badge {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 46%; flex: none;
+  padding: 3px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface);
+  font: 11.5px var(--mono); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.device-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); flex: none; }
+.device-sep { color: var(--faint); }
+.top .btn.on { background: var(--surface-2); }
+
+.main { min-height: 0; }
+.body { flex: 1; display: flex; min-height: 0; }
+.col { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+.tool-row { border: 1px solid var(--line); border-radius: 8px; background: var(--nav); font-size: 13px; }
+.tool-row summary {
+  display: grid; grid-template-columns: auto auto 1fr auto; gap: 10px; align-items: center; padding: 6px 10px; cursor: pointer; list-style: none;
+}
+.tool-row summary::-webkit-details-marker { display: none; }
+.tool-row summary::before { content: '▸'; color: var(--faint); margin-right: -4px; }
+.tool-row[open] summary::before { content: '▾'; }
+.tool-name { font-family: var(--mono); color: var(--accent-strong); }
+.tool-target { font-family: var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool-status { font-size: 12px; color: var(--faint); }
+.tool-row.ok .tool-status { color: var(--good); }
+.tool-row.error .tool-status, .tool-row.declined .tool-status, .tool-row.blocked .tool-status { color: var(--danger); }
+.tool-row.running .tool-status { color: var(--accent); }
+.tool-out {
+  margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); max-height: 320px; overflow: auto;
+  font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted);
+}
+.tool-out .del { color: var(--danger); text-decoration: line-through; text-decoration-color: rgb(239 143 134 / 0.4); }
+.tool-out .add { color: var(--good); }
+
+/* Approval cards are the one loud element on screen. */
+.approvals { padding: 0 24px 10px; max-width: 788px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; flex: none; }
+.approval {
+  border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); padding: 12px 14px;
+  box-shadow: 0 0 0 4px var(--accent-wash); display: flex; flex-direction: column; gap: 10px; animation: rise 0.12s ease-out;
+}
+.approval header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px; }
+.approval header .mono { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.approval-detail {
+  margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--nav); border: 1px solid var(--line);
+  font: 13px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto;
+}
+
+.audit { width: 380px; flex: none; border-left: 1px solid var(--line); background: var(--nav); overflow-y: auto; padding: 0 14px 20px; }
+.audit header { display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: var(--nav); padding: 10px 0; }
+.audit h2 { margin: 0; }
+.audit-target { font-size: 12px; color: var(--muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.projects { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; width: 100%; max-width: 520px; }
+.projects ul { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.project {
+  width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; cursor: pointer;
+  padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface);
+}
+.project:hover { border-color: var(--line-strong); }
+.project.on { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); font-size: 14px; }
+
+.attachments { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.thumb { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb button {
+  position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: 0; padding: 0;
+  background: rgb(0 0 0 / 0.65); color: #fff; font-size: 10px; cursor: pointer;
+}
+.attach { width: 32px; height: 32px; }
+.msg.user { display: flex; flex-direction: column; gap: 8px; }
+.msg-image { display: block; max-width: min(360px, 100%); max-height: 300px; border-radius: 10px; border: 1px solid var(--line); }
+.msg-image.placeholder { width: 160px; height: 100px; background: var(--surface); }
+
+@media (max-width: 760px) {
+  .device-badge { display: none; }
+  .audit { position: fixed; inset: 52px 0 0 auto; width: min(380px, 100vw); z-index: 20; }
+  .approvals { padding: 0 12px 8px; }
+}
