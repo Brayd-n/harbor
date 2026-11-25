@@ -1,9 +1,13 @@
-import { streamText, type ModelMessage } from 'ai';
+import { streamText } from 'ai';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { dataKey, unseal } from './crypto.ts';
 import { withUser } from './db.ts';
-import { languageModel, splitModel } from './models.ts';
+import { getCatalog, languageModel, splitModel } from './models.ts';
+import {
+  DEFAULT_SETTINGS, SHORT_ANSWERS, cheapestModel, compactSaved, compactionPlan, estimateTokens, priceCall, reasoningLevel, summarize,
+  type HistoryRow, type Settings, type Usage,
+} from './saving.ts';
 
 export type Block = { type: 'text'; text: string } | { type: 'thinking'; text: string } | { type: 'error'; text: string };
 
@@ -15,11 +19,13 @@ const systemPrompt = () =>
   `You are a helpful assistant inside Harbor, a self-hosted chat app. Today is ${new Date().toISOString().slice(0, 10)}. ` +
   'Answer in Markdown. Be direct and accurate, and say when you are unsure.';
 
-// Stored messages -> what the model sees. Thinking and error blocks are left out.
-export function toModelMessages(rows: { role: 'user' | 'assistant'; content: Block[] }[]): ModelMessage[] {
+const round = (usd: number) => Math.round(usd * 1e6) / 1e6;
+
+// Stored messages -> plain text history. Thinking and error blocks are left out.
+export function historyRows(rows: { role: 'user' | 'assistant'; content: Block[]; created_at: Date }[]): HistoryRow[] {
   return rows
-    .map((r) => ({ role: r.role, content: r.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n') }))
-    .filter((m) => m.content.trim() !== '');
+    .map((r) => ({ role: r.role, text: r.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n'), created_at: r.created_at }))
+    .filter((r) => r.text.trim() !== '');
 }
 
 export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: Buffer) {
@@ -49,10 +55,11 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
       }
 
       const setup = await withUser(pool, userId, async (db) => {
-        const chat = await db.query('SELECT title FROM chats WHERE id = $1', [id]);
+        const chat = await db.query('SELECT title, summary, summary_until FROM chats WHERE id = $1', [id]);
         if (!chat.rows[0]) return { error: 404 as const };
         const keyRow = await db.query('SELECT key_enc FROM provider_keys WHERE provider = $1', [provider]);
         if (!keyRow.rows[0]) return { error: 'nokey' as const };
+        const settings = await db.query('SELECT data FROM user_settings');
         const userMsg = await db.query(
           "INSERT INTO messages (chat_id, user_id, role, content) VALUES ($1, $2, 'user', $3) RETURNING id, role, content, created_at",
           [id, userId, JSON.stringify([{ type: 'text', text }])],
@@ -61,8 +68,15 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
           "UPDATE chats SET model = $2, updated_at = now(), title = CASE WHEN title = '' THEN $3 ELSE title END WHERE id = $1",
           [id, model, text.replace(/\s+/g, ' ').trim().slice(0, 80)],
         );
-        const history = await db.query('SELECT role, content FROM messages WHERE chat_id = $1 ORDER BY created_at', [id]);
-        return { keyEnc: keyRow.rows[0].key_enc as Buffer, userMsg: userMsg.rows[0], history: history.rows };
+        const history = await db.query('SELECT role, content, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at', [id]);
+        return {
+          keyEnc: keyRow.rows[0].key_enc as Buffer,
+          userMsg: userMsg.rows[0],
+          history: history.rows as { role: 'user' | 'assistant'; content: Block[]; created_at: Date }[],
+          summary: chat.rows[0].summary as string,
+          summaryUntil: chat.rows[0].summary_until as Date | null,
+          settings: { ...DEFAULT_SETTINGS, ...settings.rows[0]?.data } as Settings,
+        };
       });
       if ('error' in setup) {
         return setup.error === 404
@@ -70,6 +84,7 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
           : reply.code(400).send({ error: `Add your ${provider} API key in Settings first.` });
       }
       const apiKey = unseal(dataKey(masterKey, userId, req.user.wrapped), setup.keyEnc, `pk:${userId}:${provider}`).toString();
+      const info = getCatalog().find((m) => m.id === model);
 
       // Server-sent events over a POST response. The client reads it with fetch().
       reply.hijack();
@@ -81,17 +96,49 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
       // Closing the tab or pressing Stop aborts the model call; whatever arrived so far is kept.
       const abort = new AbortController();
       res.on('close', () => abort.abort());
+      const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]);
       active.set(userId, (active.get(userId) ?? 0) + 1);
 
+      // History as plain text; messages already folded into the summary aren't sent again.
+      const rows = historyRows(setup.history);
+      let summary = setup.summary;
+      let recent = rows.filter((r) => !setup.summaryUntil || r.created_at > setup.summaryUntil);
+      let compactCost = 0;
+      let compacted = false;
+
       let answer = '', thinking = '', failure = '';
-      let usage: object | null = null;
+      let usage: Record<string, unknown> | null = null;
       try {
+        // Auto-compact: fold older turns into the summary with the cheapest model on the same key.
+        const plan = setup.settings.compact ? compactionPlan(summary, recent, info?.context ?? null) : null;
+        if (plan) {
+          send({ t: 'compacting' });
+          const need = estimateTokens(summary) + plan.fold.reduce((n, r) => n + estimateTokens(r.text), 0);
+          const cheap = cheapestModel(getCatalog(), provider, need) ?? info;
+          try {
+            const result = await summarize(languageModel(provider, cheap?.id.slice(provider.length + 1) ?? modelId, apiKey, id), summary, plan.fold, signal);
+            if (result.text) {
+              summary = result.text;
+              recent = plan.keep;
+              compacted = true;
+              compactCost = priceCall(result.usage, cheap?.cost ?? null).cost;
+              const until = plan.fold[plan.fold.length - 1].created_at;
+              await withUser(pool, userId, (db) => db.query('UPDATE chats SET summary = $2, summary_until = $3 WHERE id = $1', [id, summary, until]));
+            }
+          } catch {
+            // Compaction is an optimization: if it fails, send the full history as usual.
+          }
+        }
+
+        const system =
+          systemPrompt() + (setup.settings.short ? `\n\n${SHORT_ANSWERS}` : '') + (summary ? `\n\nSummary of the earlier conversation:\n${summary}` : '');
         const result = streamText({
           model: languageModel(provider, modelId, apiKey, id),
-          system: systemPrompt(),
-          messages: toModelMessages(setup.history),
-          abortSignal: AbortSignal.any([abort.signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]),
+          system,
+          messages: recent.map(({ role, text }) => ({ role, content: text })),
+          abortSignal: signal,
           maxRetries: 1,
+          reasoning: reasoningLevel(info, setup.settings.thinkHard),
           providerOptions: cacheOptions(provider, modelId),
           // The SDK's default logs the whole error, which can include the chat text it sent. Errors
           // already reach the user through the stream, so nothing is logged here.
@@ -107,13 +154,19 @@ export function chatStreamRoute(api: FastifyInstance, pool: pg.Pool, masterKey: 
           } else if (part.type === 'error') {
             failure = errorText(part.error);
           } else if (part.type === 'finish') {
-            const u = part.totalUsage;
-            usage = {
-              input: u.inputTokens ?? null,
-              output: u.outputTokens ?? null,
-              cacheRead: u.inputTokenDetails?.cacheReadTokens ?? null,
-              cacheWrite: u.inputTokenDetails?.cacheWriteTokens ?? null,
+            const u: Usage = {
+              input: part.totalUsage.inputTokens ?? null,
+              output: part.totalUsage.outputTokens ?? null,
+              cacheRead: part.totalUsage.inputTokenDetails?.cacheReadTokens ?? null,
+              cacheWrite: part.totalUsage.inputTokenDetails?.cacheWriteTokens ?? null,
             };
+            const priced = priceCall(u, info?.cost ?? null);
+            // Savings meter: caching discount, plus history not resent because of the summary,
+            // minus what the summary itself cost this turn.
+            const full = rows.reduce((n, r) => n + estimateTokens(r.text), 0);
+            const sent = estimateTokens(summary) + recent.reduce((n, r) => n + estimateTokens(r.text), 0);
+            const saved = priced.cacheSaved + (summary ? compactSaved(full, sent, info?.cost ?? null) : 0) - compactCost;
+            usage = { ...u, cost: round(priced.cost + compactCost), saved: round(saved), ...(compacted && { compacted: true }) };
           }
         }
       } catch (e) {

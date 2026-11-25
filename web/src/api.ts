@@ -2,9 +2,13 @@ export type User = { email: string; name: string; role: 'owner' | 'user' };
 export type AuthState = { step: 'signed_out' } | { step: 'enroll' | 'verify' | 'ready'; user: User };
 
 export type Block = { type: 'text' | 'thinking' | 'error'; text: string };
-export type Message = { id: string; role: 'user' | 'assistant'; content: Block[]; model?: string | null; usage?: { input: number | null; output: number | null; cacheRead?: number | null } | null; created_at: string };
+export type Message = { id: string; role: 'user' | 'assistant'; content: Block[]; model?: string | null; usage?: { input: number | null; output: number | null; cacheRead?: number | null; cost?: number; saved?: number; compacted?: boolean } | null; created_at: string };
 export type ChatSummary = { id: string; title: string; model: string; updated_at: string };
-export type Chat = ChatSummary & { messages: Message[] };
+export type Chat = ChatSummary & { messages: Message[]; summary_until: string | null };
+export type SavingSettings = { compact: boolean; short: boolean; thinkHard: boolean };
+export type UsageTotals = { month_cost: number; month_saved: number; total_cost: number; total_saved: number };
+
+export const usd = (v: number) => (v === 0 ? '$0' : Math.abs(v) < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(2)}`);
 export type Model = { id: string; provider: string; name: string; vision: boolean; reasoning: boolean; tools: boolean; context: number | null; cost: { input: number; output: number } | null };
 export type Provider = { id: string; name: string; key: { last4: string; created_at: string } | null };
 
@@ -33,6 +37,7 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
 export type StreamEvent =
   | { t: 'user'; message: Message }
   | { t: 'text' | 'thinking'; d: string }
+  | { t: 'compacting' }
   | { t: 'done'; message: Message };
 
 // Sends a message and calls onEvent for each server-sent event until the reply is saved.

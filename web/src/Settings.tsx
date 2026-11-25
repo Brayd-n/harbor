@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, PROVIDER_HELP, type Provider, type User } from './api.ts';
+import { api, PROVIDER_HELP, usd, type Provider, type SavingSettings, type UsageTotals, type User } from './api.ts';
 
 export function Settings({ user, tab, setTab, onClose }: { user: User; tab: string; setTab: (t: string) => void; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -8,6 +8,7 @@ export function Settings({ user, tab, setTab, onClose }: { user: User; tab: stri
   }, []);
   const tabs: [string, string][] = [
     ['providers', 'API keys'],
+    ['saving', 'Saving'],
     ['account', 'Account'],
     ...(user.role === 'owner' ? [['admin', 'Users'] as [string, string]] : []),
   ];
@@ -29,11 +30,58 @@ export function Settings({ user, tab, setTab, onClose }: { user: User; tab: stri
         </div>
         <div className="settings-body">
           {tab === 'providers' && <Providers />}
+          {tab === 'saving' && <Saving />}
           {tab === 'account' && <Account user={user} />}
           {tab === 'admin' && <Admin />}
         </div>
       </div>
     </dialog>
+  );
+}
+
+const SWITCHES: [keyof SavingSettings, string][] = [
+  ['compact', 'Compact long chats'],
+  ['short', 'Short answers'],
+  ['thinkHard', 'Extended thinking'],
+];
+
+function Saving() {
+  const [s, setS] = useState<SavingSettings | null>(null);
+  const [u, setU] = useState<UsageTotals | null>(null);
+  useEffect(() => {
+    api<SavingSettings>('/api/settings').then(setS);
+    api<UsageTotals>('/api/usage').then(setU);
+  }, []);
+  const flip = async (key: keyof SavingSettings) => {
+    if (!s) return;
+    setS({ ...s, [key]: !s[key] });
+    setS(await api<SavingSettings>('/api/settings', { method: 'PUT', body: { [key]: !s[key] } }));
+  };
+  return (
+    <div className="stack">
+      {u && (
+        <section className="meter">
+          <div>
+            <span className="meter-value">{usd(u.month_cost)}</span>
+            <span className="muted">Spent this month</span>
+          </div>
+          <div>
+            <span className="meter-value saved">{usd(Math.max(0, u.month_saved))}</span>
+            <span className="muted">Saved this month</span>
+          </div>
+        </section>
+      )}
+      {s && (
+        <section className="switches">
+          {SWITCHES.map(([key, label]) => (
+            <label key={key} className="switch-row">
+              <span>{label}</span>
+              <button role="switch" aria-checked={s[key]} className="switch" onClick={() => flip(key)} />
+            </label>
+          ))}
+        </section>
+      )}
+    </div>
   );
 }
 

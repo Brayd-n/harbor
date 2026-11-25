@@ -15,6 +15,7 @@
   --accent-wash: rgb(201 161 90 / 0.12);
   --danger: #ef8f86;
   --danger-wash: rgb(239 143 134 / 0.1);
+  --good: #8fcf9f;
   --p-anthropic: #d4a27f;
   --p-openai: #9fd4c0;
   --p-google: #8ab4f8;
@@ -42,6 +43,7 @@
     --accent-wash: rgb(138 106 46 / 0.1);
     --danger: #b3261e;
     --danger-wash: rgb(179 38 30 / 0.07);
+    --good: #2f7d47;
     --p-anthropic: #b5683d;
     --p-openai: #2f8a6a;
     --p-google: #2f68c9;
@@ -310,3 +312,28 @@ button.top-title:hover { background: var(--surface); }
   .composer-hint { display: none; }
   .empty { padding-top: 10vh; }
 }
+
+/* ---------- token saving ---------- */
+.saved { color: var(--good); }
+.summarized {
+  display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--faint); margin: 4px 0 24px;
+}
+.summarized::before, .summarized::after { content: ''; flex: 1; border-top: 1px dashed var(--line-strong); }
+.msg-wrap { display: contents; }
+.meter { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.meter > div { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.meter .muted { font-size: 13px; }
+.meter-value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.switches { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.switch-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; cursor: pointer; }
+.switch-row + .switch-row { border-top: 1px solid var(--line); }
+.switch {
+  width: 38px; height: 22px; border-radius: 11px; border: 0; padding: 0; cursor: pointer; position: relative;
+  background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line-strong); transition: background 0.15s;
+}
+.switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--muted); transition: transform 0.15s, background 0.15s;
+}
+.switch[aria-checked='true'] { background: var(--accent); box-shadow: none; }
+.switch[aria-checked='true']::after { transform: translateX(16px); background: var(--accent-ink); }

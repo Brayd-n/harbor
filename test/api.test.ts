@@ -191,6 +191,85 @@ test('OpenCode Go models go to the endpoint the catalog names, and only ever to 
   assert.equal((await as('alice', 'GET', '/api/models')).json().length, 4, 'free Go models are hidden');
 });
 
+test('long chats get compacted by the cheapest model, and the savings meter counts it', async () => {
+  setCatalogForTests(
+    parseCatalog({
+      anthropic: {
+        models: {
+          'claude-big': { id: 'claude-big', name: 'Big', limit: { context: 200_000 }, cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 } },
+          'claude-cheap': { id: 'claude-cheap', name: 'Cheap', limit: { context: 200_000 }, cost: { input: 1, output: 5 } },
+        },
+      },
+    }),
+  );
+  await as('bob', 'PUT', '/api/providers/anthropic', { key: 'sk-ant-bob-9999' });
+  assert.deepEqual((await as('bob', 'GET', '/api/settings')).json(), { compact: true, short: false, thinkHard: false });
+  assert.equal((await as('bob', 'PUT', '/api/settings', { short: true })).json().short, true);
+  assert.ok(!('nope' in (await as('bob', 'PUT', '/api/settings', { nope: 1 })).json()), 'unknown settings are dropped');
+  assert.equal((await as('bob', 'PUT', '/api/settings', { short: 'yes' })).statusCode, 400);
+
+  const chat = (await as('bob', 'POST', '/api/chats', { model: 'anthropic:claude-big' })).json();
+  // 10 old messages of ~3k tokens each: past the 24k-token threshold.
+  await withUser(pool, users.bob.id, async (db) => {
+    for (let i = 0; i < 10; i++) {
+      await db.query('INSERT INTO messages (chat_id, user_id, role, content) VALUES ($1, $2, $3, $4)', [
+        chat.id,
+        users.bob.id,
+        i % 2 ? 'assistant' : 'user',
+        JSON.stringify([{ type: 'text', text: `message ${i} ` + 'y'.repeat(12_000) }]),
+      ]);
+    }
+  });
+
+  const realFetch = globalThis.fetch;
+  const bodies: { model: string; stream?: boolean; system?: unknown; messages: unknown[] }[] = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    bodies.push(body);
+    if (!body.stream) {
+      return Response.json({ id: 's', type: 'message', role: 'assistant', model: body.model, content: [{ type: 'text', text: 'SUMMARY: user asked about y' }], stop_reason: 'end_turn', usage: { input_tokens: 9000, output_tokens: 50 } });
+    }
+    const ev = [
+      ['message_start', { type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, usage: { input_tokens: 9000, output_tokens: 0 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ];
+    return new Response(ev.map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+  }) as typeof fetch;
+  try {
+    const r = await as('bob', 'POST', `/api/chats/${chat.id}/messages`, { text: 'next question', model: 'anthropic:claude-big' });
+    assert.equal(r.statusCode, 200);
+    assert.ok(r.body.includes('"t":"compacting"'));
+    // The next turn doesn't compact again, and saves by sending the summary instead of the old turns.
+    const r2 = await as('bob', 'POST', `/api/chats/${chat.id}/messages`, { text: 'and another', model: 'anthropic:claude-big' });
+    assert.ok(!r2.body.includes('"t":"compacting"'));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  assert.equal(bodies.length, 3);
+  assert.equal(bodies[0].model, 'claude-cheap', 'the summary uses the cheapest model');
+  assert.equal(bodies[1].model, 'claude-big');
+  const system = JSON.stringify(bodies[1].system);
+  assert.ok(system.includes('SUMMARY: user asked about y'), 'the summary rides in the system prompt');
+  assert.ok(system.includes('as briefly as the question allows'), 'short answers is on');
+  assert.equal(bodies[1].messages.length, 6, 'only the newest 6 messages are sent word for word');
+
+  const saved = (await as('bob', 'GET', `/api/chats/${chat.id}`)).json();
+  assert.ok(saved.summary_until, 'the chat remembers where the summary ends');
+  const [first, second] = saved.messages.filter((m: { role: string; usage: unknown }) => m.role === 'assistant' && m.usage).map((m: { usage: Record<string, number> }) => m.usage);
+  assert.equal(first.compacted, true);
+  assert.ok(first.cost > 0, 'the compaction turn includes the summary call in its cost');
+  assert.ok(second.saved > 0 && !second.compacted, JSON.stringify(second));
+  const meter = (await as('bob', 'GET', '/api/usage')).json();
+  assert.equal(meter.month_saved.toFixed(6), (first.saved + second.saved).toFixed(6));
+  assert.equal(meter.month_cost.toFixed(6), (first.cost + second.cost).toFixed(6));
+  await pool.query('DELETE FROM provider_keys WHERE user_id = $1', [users.bob.id]);
+});
+
 test('a session that has not passed 2FA cannot use the API, and 2FA codes work once', async () => {
   await makeUser('carol', false);
   assert.equal((await as('carol', 'GET', '/api/chats')).statusCode, 401);

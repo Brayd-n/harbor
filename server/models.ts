@@ -59,7 +59,8 @@ export type CatalogModel = {
   reasoning: boolean;
   tools: boolean;
   context: number | null;
-  cost: { input: number; output: number } | null; // USD per million tokens
+  cost: { input: number; output: number; cacheRead?: number; cacheWrite?: number } | null; // USD per million tokens
+  effort?: string[]; // thinking levels the model accepts, when it lists them
   released: string;
   sdk?: Sdk; // per-model API style, only used for OpenCode Go
 };
@@ -70,8 +71,10 @@ export const getCatalog = () => catalog;
 
 type DevModel = {
   id: string; name: string; status?: string; tool_call?: boolean; reasoning?: boolean; release_date?: string;
-  modalities?: { input?: string[]; output?: string[] }; limit?: { context?: number }; cost?: { input?: number; output?: number };
+  modalities?: { input?: string[]; output?: string[] }; limit?: { context?: number };
   provider?: Sdk;
+  cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number };
+  reasoning_options?: { type: string; values?: string[] }[];
 };
 
 export function parseCatalog(data: Record<string, { models?: Record<string, DevModel> }>): CatalogModel[] {
@@ -89,7 +92,11 @@ export function parseCatalog(data: Record<string, { models?: Record<string, DevM
         reasoning: !!m.reasoning,
         tools: !!m.tool_call,
         context: m.limit?.context ?? null,
-        cost: m.cost?.input != null && m.cost.output != null ? { input: m.cost.input, output: m.cost.output } : null,
+        cost:
+          m.cost?.input != null && m.cost.output != null
+            ? { input: m.cost.input, output: m.cost.output, cacheRead: m.cost.cache_read, cacheWrite: m.cost.cache_write }
+            : null,
+        effort: m.reasoning_options?.find((o) => o.type === 'effort')?.values,
         released: m.release_date ?? '',
         ...(provider === 'opencode-go' && m.provider?.npm ? { sdk: { npm: m.provider.npm, api: m.provider.api } } : {}),
       });

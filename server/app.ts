@@ -9,6 +9,7 @@ import { chatStreamRoute } from './chat.ts';
 import { dataKey, seal } from './crypto.ts';
 import { withUser } from './db.ts';
 import { PROVIDERS, getCatalog, isProvider, splitModel } from './models.ts';
+import { DEFAULT_SETTINGS, settingsSchema } from './saving.ts';
 
 export type Config = AuthConfig & { webDir?: string };
 
@@ -144,7 +145,7 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
       api.get('/chats/:id', { schema: { params: idParam } }, async (req, reply) => {
         const { id } = req.params as { id: string };
         const chat = await as(req.user.id, async (db) => {
-          const c = await db.query('SELECT id, title, model, updated_at FROM chats WHERE id = $1', [id]);
+          const c = await db.query('SELECT id, title, model, updated_at, summary_until FROM chats WHERE id = $1', [id]);
           if (!c.rows[0]) return null;
           const m = await db.query('SELECT id, role, content, model, usage, created_at FROM messages WHERE chat_id = $1 ORDER BY created_at', [id]);
           return { ...c.rows[0], messages: m.rows };
@@ -169,6 +170,37 @@ export function buildApp(pool: pg.Pool, cfg: Config) {
       });
 
       chatStreamRoute(api, pool, cfg.masterKey);
+
+      // --- Token saving ---
+
+      api.get('/settings', async (req) =>
+        as(req.user.id, async (db) => ({ ...DEFAULT_SETTINGS, ...(await db.query('SELECT data FROM user_settings')).rows[0]?.data })),
+      );
+
+      api.put('/settings', { schema: { body: settingsSchema } }, async (req) =>
+        as(req.user.id, async (db) => {
+          const { rows } = await db.query(
+            `INSERT INTO user_settings (user_id, data) VALUES ($1, $2)
+             ON CONFLICT (user_id) DO UPDATE SET data = user_settings.data || EXCLUDED.data RETURNING data`,
+            [req.user.id, JSON.stringify(req.body)],
+          );
+          return { ...DEFAULT_SETTINGS, ...rows[0].data };
+        }),
+      );
+
+      // Savings meter: spent and saved, this month and all time (USD).
+      api.get('/usage', async (req) =>
+        as(req.user.id, async (db) => {
+          const { rows } = await db.query(
+            `SELECT coalesce(sum((usage->>'cost')::numeric) FILTER (WHERE created_at >= date_trunc('month', now())), 0)::float AS month_cost,
+                    coalesce(sum((usage->>'saved')::numeric) FILTER (WHERE created_at >= date_trunc('month', now())), 0)::float AS month_saved,
+                    coalesce(sum((usage->>'cost')::numeric), 0)::float AS total_cost,
+                    coalesce(sum((usage->>'saved')::numeric), 0)::float AS total_saved
+             FROM messages WHERE role = 'assistant' AND usage ? 'cost'`,
+          );
+          return rows[0];
+        }),
+      );
 
       // --- Account ---
 

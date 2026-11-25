@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { api, relativeDay, sendMessage, type Chat, type ChatSummary, type Message, type Model, type User } from './api.ts';
+import { api, relativeDay, sendMessage, usd, type Chat, type ChatSummary, type Message, type Model, type User } from './api.ts';
 import { Mark } from './Auth.tsx';
 import { Settings } from './Settings.tsx';
 
@@ -133,7 +133,7 @@ export function Shell({ user }: { user: User }) {
   );
 }
 
-type Pending = { text: string; thinking: string } | null;
+type Pending = { text: string; thinking: string; compacting?: boolean } | null;
 
 function ChatView(props: {
   chatId: string | null;
@@ -196,7 +196,8 @@ function ChatView(props: {
       await sendMessage(liveId.current, text, model, ctl.signal, (e) => {
         if (e.t === 'user' || e.t === 'done') setMessages((m) => [...m, e.message]);
         if (e.t === 'done') setPending(null);
-        if (e.t === 'text') setPending((p) => p && { ...p, text: p.text + e.d });
+        if (e.t === 'compacting') setPending((p) => p && { ...p, compacting: true });
+        if (e.t === 'text') setPending((p) => p && { ...p, text: p.text + e.d, compacting: false });
         if (e.t === 'thinking') setPending((p) => p && { ...p, thinking: p.thinking + e.d });
       });
     } catch (e) {
@@ -207,7 +208,7 @@ function ChatView(props: {
       abortRef.current = null;
       props.onChanged();
       // A chat created by this send has a title now; show it in the header.
-      if (!chat && liveId.current) api<Chat>(`/api/chats/${liveId.current}`).then(setChat, () => {});
+      if (liveId.current) api<Chat>(`/api/chats/${liveId.current}`).then(setChat, () => {});
     }
   };
 
@@ -218,6 +219,7 @@ function ChatView(props: {
   };
 
   const current = models?.find((m) => m.id === model);
+  const summaryUntil = chat?.summary_until ?? null;
   const noKeys = models !== null && models.length === 0;
 
   return (
@@ -263,11 +265,17 @@ function ChatView(props: {
               )}
             </div>
           )}
-          {messages.map((m) => (
-            <MessageView key={m.id} m={m} models={models} />
+          {messages.map((m, i) => (
+            <div key={m.id} className="msg-wrap">
+              {summaryUntil && i > 0 && m.created_at > summaryUntil && messages[i - 1].created_at <= summaryUntil && (
+                <div className="summarized">Earlier messages summarized</div>
+              )}
+              <MessageView m={m} models={models} />
+            </div>
           ))}
           {pending && (
             <article className="msg assistant">
+              {pending.compacting && <div className="summarized">Summarizing earlier messages…</div>}
               {pending.thinking && <Thinking text={pending.thinking} live={!pending.text} />}
               {pending.text ? <Prose text={pending.text} /> : !pending.thinking && <span className="typing" aria-label="Waiting for reply" />}
             </article>
@@ -339,6 +347,8 @@ function MessageView({ m, models }: { m: Message; models: Model[] | null }) {
         <span>{name}</span>
         {m.usage?.output != null && <span>{m.usage.output.toLocaleString()} tokens</span>}
         {!!m.usage?.cacheRead && <span title="Input tokens billed at the cached rate">{m.usage.cacheRead.toLocaleString()} cached</span>}
+        {m.usage?.cost != null && m.usage.cost > 0 && <span>{usd(m.usage.cost)}</span>}
+        {!!m.usage?.saved && m.usage.saved > 0 && <span className="saved">saved {usd(m.usage.saved)}</span>}
         {text && <CopyButton text={text} />}
       </footer>
     </article>
